@@ -1,0 +1,419 @@
+# Vue "Thermostats" (type sections). A coller dans l'editeur YAML d'un tableau de bord
+# (Modifier > ... > Editeur de configuration), dans la liste "views:".
+# Cartes HACS requises : Mushroom, mini-graph-card, card-mod.
+# Exemple avec une piece monosplit (Salon) et une chambre bi-split ; dupliquer la
+# section d'une piece pour les autres en changeant les entites.
+
+title: Thermostats
+path: thermostats
+icon: mdi:thermostat
+type: sections
+max_columns: 3
+dense_section_placement: true
+sections:
+  # ---------------------------------------------------------------- Bandeau ---
+  - type: grid
+    column_span: 3
+    cards:
+      - type: custom:mushroom-chips-card
+        alignment: center
+        card_mod:
+          style: >-
+            ha-card { --chip-height: 36px; --chip-border-radius: 18px; --chip-box-shadow: none;
+            --chip-background: rgba(var(--rgb-primary-text-color),0.05); --chip-spacing: 8px; }
+        chips:
+          - type: template
+            icon: mdi:circle
+            icon_color: >-
+              {% set c = states('sensor.rte_tempo_couleur_actuelle') %}{{ {'Bleu':'blue','Blanc':'white','Rouge':'red'}.get(c,'grey') }}
+            content: "Aujourd'hui {{ states('sensor.rte_tempo_couleur_actuelle') }}"
+          - type: template
+            icon: mdi:circle-outline
+            icon_color: >-
+              {% set c = states('sensor.rte_tempo_prochaine_couleur') %}{{ {'Bleu':'blue','Blanc':'white','Rouge':'red'}.get(c,'grey') }}
+            content: "Demain {{ states('sensor.rte_tempo_prochaine_couleur') }}"
+          - type: template
+            icon: mdi:currency-eur
+            icon_color: green
+            content: "{{ (states('sensor.tarif_actuel_tempo_9kva_ttc')|float(0)*100)|round(1) }} c€/kWh"
+          - type: template
+            icon: >-
+              {% set s = states('sensor.chauffage_source_active') %}
+              {{ 'mdi:fire' if 'Gaz' in s else ('mdi:snowflake' if 'été' in s else ('mdi:power' if s == 'Arrêt' else 'mdi:heat-pump')) }}
+            icon_color: "{{ 'deep-orange' if 'Gaz' in states('sensor.chauffage_source_active') else 'indigo' }}"
+            content: "{{ states('sensor.chauffage_source_active') }}"
+          - type: template
+            icon: "{{ 'mdi:home-account' if is_state('binary_sensor.presence_maison','on') else 'mdi:home-export-outline' }}"
+            icon_color: "{{ 'green' if is_state('binary_sensor.presence_maison','on') else 'grey' }}"
+            content: >-
+              {{ 'Présents' if is_state('binary_sensor.presence_maison','on') else 'Absents' }}{{ '' if states('input_select.mode_presence').startswith('Auto') else ' (forcé)' }}
+          - type: conditional
+            conditions:
+              - entity: input_boolean.surplus_solaire
+                state: "on"
+            chip:
+              type: template
+              entity: input_boolean.surplus_solaire
+              icon: mdi:solar-power-variant
+              icon_color: amber
+              content: Surplus
+
+  # ------------------------------------------------------ Piece monosplit ---
+  - type: grid
+    cards:
+      - type: heading
+        heading: Salon
+        icon: mdi:sofa
+        heading_style: title
+        badges:
+          - type: entity
+            entity: climate.clim_salon
+            icon: mdi:thermometer
+            state_content: current_temperature
+          - type: entity
+            entity: sensor.clim_salon_conso_jour
+            icon: mdi:lightning-bolt
+            color: amber
+      - type: tile
+        entity: climate.clim_salon
+        name: Climatisation
+        icon: mdi:air-conditioner
+        state_content: [hvac_action, current_temperature]
+        grid_options: { columns: 12 }
+        card_mod: &carte
+          style: "ha-card { border-radius: 22px; border: none; box-shadow: 0 2px 14px rgba(0,0,0,0.06); }"
+        features:
+          - type: target-temperature
+          - type: climate-hvac-modes
+            style: icons
+            hvac_modes: ["off", heat, cool, auto, dry, fan_only]
+      # N'apparait que pendant une derogation manuelle ; toucher = reprise auto
+      - type: custom:mushroom-template-card
+        entity: timer.derogation_clim_salon
+        primary: Réglage manuel
+        secondary: >-
+          Reprise automatique à {{ as_timestamp(state_attr('timer.derogation_clim_salon','finishes_at')) | timestamp_custom('%H:%M') }} · toucher pour reprendre
+        icon: mdi:hand-back-right
+        icon_color: orange
+        tap_action:
+          action: perform-action
+          perform_action: timer.finish
+          target: { entity_id: timer.derogation_clim_salon }
+        grid_options: { columns: 12 }
+        visibility:
+          - condition: state
+            entity: timer.derogation_clim_salon
+            state: active
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: select.clim_salon_ventilation
+        name: Ventilation
+        icon: mdi:fan
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-entity-card
+        entity: switch.clim_salon_mode_nuit
+        name: Mode nuit
+        icon: mdi:weather-night
+        icon_color: indigo
+        layout: horizontal
+        tap_action: { action: toggle }
+        grid_options: { columns: 6 }
+        card_mod: *carte
+      - type: custom:mushroom-template-card
+        entity: sensor.clim_salon_puissance_estimee
+        primary: Puissance
+        secondary: "{{ states('sensor.clim_salon_puissance_estimee') | int(0) }} W"
+        icon: mdi:flash
+        icon_color: "{{ 'amber' if states('sensor.clim_salon_puissance_estimee')|float(0) > 50 else 'grey' }}"
+        layout: horizontal
+        grid_options: { columns: 6 }
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: select.clim_salon_balayage_vertical
+        name: Volet vertical
+        icon: mdi:arrow-up-down
+        icon_color: teal
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: select.clim_salon_balayage_horizontal
+        name: Volet horizontal
+        icon: mdi:arrow-left-right
+        icon_color: teal
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-climate-card
+        entity: climate.salon
+        name: Radiateurs (gaz)
+        icon: mdi:radiator
+        show_temperature_control: false
+        hvac_modes: [auto, heat, "off"]
+        collapsible_controls: true
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+
+  # ------------------------------------------------------- Chambre bi-split ---
+  # Les entites viennent du composant ACW02 (noms "oscillation", "nuit"...)
+  - type: grid
+    cards:
+      - type: heading
+        heading: Chambre 1
+        icon: mdi:bed
+        heading_style: title
+        badges:
+          - type: entity
+            entity: climate.clim_chambre_1
+            icon: mdi:thermometer
+            state_content: current_temperature
+          - type: entity
+            entity: sensor.clim_chambre_1_conso_jour
+            icon: mdi:lightning-bolt
+            color: amber
+      - type: tile
+        entity: climate.clim_chambre_1
+        name: Climatisation
+        icon: mdi:air-conditioner
+        state_content: [hvac_action, current_temperature]
+        grid_options: { columns: 12 }
+        card_mod: *carte
+        features:
+          - type: target-temperature
+          - type: climate-hvac-modes
+            style: icons
+            hvac_modes: ["off", heat, cool, auto, dry, fan_only]
+      - type: custom:mushroom-template-card
+        entity: timer.derogation_clim_chambre_1
+        primary: Réglage manuel
+        secondary: >-
+          Reprise automatique à {{ as_timestamp(state_attr('timer.derogation_clim_chambre_1','finishes_at')) | timestamp_custom('%H:%M') }} · toucher pour reprendre
+        icon: mdi:hand-back-right
+        icon_color: orange
+        tap_action:
+          action: perform-action
+          perform_action: timer.finish
+          target: { entity_id: timer.derogation_clim_chambre_1 }
+        grid_options: { columns: 12 }
+        visibility:
+          - condition: state
+            entity: timer.derogation_clim_chambre_1
+            state: active
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: select.clim_chambre_1_ventilation
+        name: Ventilation
+        icon: mdi:fan
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-entity-card
+        entity: switch.clim_chambre_1_nuit
+        name: Mode nuit
+        icon: mdi:weather-night
+        icon_color: indigo
+        layout: horizontal
+        tap_action: { action: toggle }
+        grid_options: { columns: 6 }
+        card_mod: *carte
+      - type: custom:mushroom-template-card
+        entity: sensor.clim_bisplit_1_puissance_moyenne
+        primary: Puissance
+        secondary: "{{ states('sensor.clim_bisplit_1_puissance_moyenne') | int(0) }} W"
+        icon: mdi:flash
+        icon_color: "{{ 'amber' if states('sensor.clim_bisplit_1_puissance_moyenne')|float(0) > 50 else 'grey' }}"
+        layout: horizontal
+        grid_options: { columns: 6 }
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: select.clim_chambre_1_oscillation_vertical
+        name: Volet vertical
+        icon: mdi:arrow-up-down
+        icon_color: teal
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: select.clim_chambre_1_oscillation_horizontal
+        name: Volet horizontal
+        icon: mdi:arrow-left-right
+        icon_color: teal
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-climate-card
+        entity: climate.chambre_1
+        name: Radiateurs (gaz)
+        icon: mdi:radiator
+        show_temperature_control: false
+        hvac_modes: [auto, heat, "off"]
+        collapsible_controls: true
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+
+  # ----------------------------------------------------------- Consommation ---
+  - type: grid
+    cards:
+      - type: heading
+        heading: Consommation
+        icon: mdi:lightning-bolt
+        heading_style: title
+      - type: custom:mini-graph-card
+        name: Puissance des clims
+        icon: mdi:flash
+        hours_to_show: 24
+        points_per_hour: 4
+        line_width: 2
+        smoothing: true
+        show: { fill: fade, legend: true, labels: false, points: false, state: false }
+        entities:
+          - { entity: sensor.clim_salon_puissance_estimee, name: Salon, color: "#0A84FF" }
+          - { entity: sensor.clim_bureau_puissance_estimee, name: Bureau, color: "#5E5CE6" }
+          - { entity: sensor.clim_bisplit_1_puissance_moyenne, name: Chambre 1, color: "#FF9F0A" }
+          - { entity: sensor.clim_bisplit_2_puissance_moyenne, name: Chambre 2, color: "#30D158" }
+          - { entity: sensor.clim_bisplit_3_puissance_moyenne, name: Chambre 3, color: "#FF375F" }
+          - { entity: sensor.clim_bisplit_4_puissance_moyenne, name: Parents, color: "#64D2FF" }
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: statistics-graph
+        title: Par jour
+        chart_type: bar
+        period: day
+        days_to_show: 7
+        stat_types: [change]
+        entities:
+          - { entity: sensor.clim_salon_energie_estimee, name: Salon }
+          - { entity: sensor.clim_bureau_energie_estimee, name: Bureau }
+          - { entity: sensor.clim_bisplit_1_energie_consommee, name: Chambre 1 }
+          - { entity: sensor.clim_bisplit_2_energie_consommee, name: Chambre 2 }
+          - { entity: sensor.clim_bisplit_3_energie_consommee, name: Chambre 3 }
+          - { entity: sensor.clim_bisplit_4_energie_consommee, name: Parents }
+        grid_options: { columns: 12 }
+        card_mod: *carte
+
+  # ---------------------------------------------------------------- Pilotage ---
+  - type: grid
+    cards:
+      - type: heading
+        heading: Pilotage
+        icon: mdi:robot-outline
+        heading_style: title
+      - type: custom:mushroom-entity-card
+        entity: input_boolean.superviseur_chauffage
+        name: Superviseur
+        icon: mdi:robot
+        icon_color: green
+        tap_action: { action: toggle }
+        layout: vertical
+        fill_container: true
+        grid_options: { columns: 6 }
+        card_mod: *carte
+      - type: custom:mushroom-template-card
+        entity: script.reprendre_pilotage_clims
+        primary: Tout en auto
+        secondary: >-
+          {{ states.timer | selectattr('entity_id','search','derogation_clim') | selectattr('state','eq','active') | list | count }} en manuel
+        icon: mdi:robot-happy
+        icon_color: blue
+        layout: vertical
+        fill_container: true
+        tap_action:
+          action: perform-action
+          perform_action: script.turn_on
+          target: { entity_id: script.reprendre_pilotage_clims }
+        grid_options: { columns: 6 }
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: input_select.saison_clim
+        name: Saison
+        icon: mdi:sun-snowflake-variant
+        icon_color: cyan
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-select-card
+        entity: input_select.mode_presence
+        name: Présence
+        icon: mdi:map-marker-account
+        icon_color: green
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - type: custom:mushroom-template-card
+        entity: binary_sensor.presence_maison
+        primary: Détection
+        secondary: >-
+          Téléphones : {{ 'à la maison' if is_state('binary_sensor.presence_telephones','on') else 'partis' }} · Tado : {{ 'maison' if is_state('sensor.maison_mode_tado','HOME') else 'absent' }}
+        icon: mdi:radar
+        icon_color: grey
+        grid_options: { columns: 12 }
+        card_mod: *carte
+
+  # ------------------------------------------------------------ Reglages ---
+  - type: grid
+    cards:
+      - type: heading
+        heading: Réglages hiver
+        icon: mdi:snowflake-thermometer
+        heading_style: title
+      - &nombre
+        type: custom:mushroom-number-card
+        entity: input_number.chauffage_consigne_jour
+        name: Jour (présents)
+        icon: mdi:sun-thermometer
+        display_mode: buttons
+        icon_color: indigo
+        layout: horizontal
+        grid_options: { columns: 12 }
+        card_mod: *carte
+      - <<: *nombre
+        entity: input_number.chauffage_consigne_chambres_journee
+        name: Chambres en journée
+        icon: mdi:bed
+      - <<: *nombre
+        entity: input_number.chauffage_consigne_nuit
+        name: Nuit
+        icon: mdi:weather-night
+      - <<: *nombre
+        entity: input_number.chauffage_consigne_absence
+        name: Absence
+        icon: mdi:home-export-outline
+      - <<: *nombre
+        entity: input_number.chauffage_prechauffage_veille_rouge
+        name: Préchauffage avant jour rouge
+        icon: mdi:thermometer-plus
+      - <<: *nombre
+        entity: input_number.chauffage_anticipation_reveil
+        name: Anticipation du réveil (min)
+        icon: mdi:clock-fast
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Réglages été & horaires
+        icon: mdi:weather-sunny
+        heading_style: title
+      - <<: *nombre
+        entity: input_number.clim_consigne_ete_jour
+        name: Été · jour
+        icon: mdi:weather-sunny
+      - <<: *nombre
+        entity: input_number.clim_consigne_ete_nuit
+        name: Été · nuit
+        icon: mdi:weather-night
+      - <<: *nombre
+        entity: input_number.clim_consigne_ete_absence
+        name: Été · absence
+        icon: mdi:home-export-outline
+      - type: entities
+        state_color: false
+        grid_options: { columns: 12 }
+        card_mod: *carte
+        entities:
+          - { entity: input_datetime.chauffage_reveil_semaine, name: Confort dès (semaine) }
+          - { entity: input_datetime.chauffage_reveil_week_end, name: Confort dès (week-end) }
+          - { entity: input_datetime.chauffage_chambres_debut_journee, name: "Chambres journée : début" }
+          - { entity: input_datetime.chauffage_chambres_fin_journee, name: "Chambres journée : fin" }
+          - { entity: input_datetime.chauffage_debut_nuit, name: Début de la nuit }

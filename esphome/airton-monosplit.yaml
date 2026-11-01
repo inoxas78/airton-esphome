@@ -1,0 +1,309 @@
+# =============================================================================
+#  Airton monosplit (module Wi-Fi USB Tuya, MCU protocole 55 AA) -> ESPHome
+#  Remplace le dongle Airton : un ESP8266 (ESP-12E) parle directement a la carte
+#  de l'unite interieure en UART 9600 bauds.
+#
+#  Fichier "package" : a inclure depuis un fichier par appareil, voir
+#  clim-salon.yaml / clim-bureau.yaml. Documentation : docs/protocole-tuya-monosplit.md
+# =============================================================================
+
+esphome:
+  name: ${dev_name}
+  friendly_name: ${dev_friendly}
+
+esp8266:
+  board: esp12e
+
+web_server:
+  port: 80
+  local: true
+
+logger:
+  baud_rate: 0          # l'UART materiel est utilise par la clim
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+  ap:
+    ssid: ${dev_friendly} Fallback
+
+captive_portal:
+
+uart:
+  id: uart_bus
+  rx_pin: ${rx_pin}
+  tx_pin: ${tx_pin}
+  baud_rate: 9600
+
+# Etat de la clim tel que renvoye par la carte (DP1 marche, DP2 consigne, DP4 mode)
+globals:
+  - id: g_power
+    type: bool
+    initial_value: 'false'
+  - id: g_mode
+    type: int
+    initial_value: '-1'        # -1 = pas encore recu (evite un faux "Auto" au demarrage)
+  - id: g_consigne
+    type: int
+    initial_value: '0'
+
+tuya:
+  id: tuya_mcu
+  on_datapoint_update:
+    - sensor_datapoint: 1
+      datapoint_type: bool
+      then:
+        - lambda: 'id(g_power) = x;'
+        - script.execute: publier_clim
+    - sensor_datapoint: 2
+      datapoint_type: int
+      then:
+        # La carte renvoie la consigne en °C entiers, parfois en dixiemes (echo d'un ordre)
+        - lambda: 'id(g_consigne) = (x > 100) ? (int) lroundf(x / 10.0f) : (int) x;'
+        - script.execute: publier_clim
+    - sensor_datapoint: 4
+      datapoint_type: enum
+      then:
+        - lambda: 'id(g_mode) = x;'
+        - script.execute: publier_clim
+    # Le DP3 transporte aussi une seconde valeur (< 5 en brut, ex. 4 / 14) : isolee a part
+    - sensor_datapoint: 3
+      datapoint_type: int
+      then:
+        - lambda: 'if (x < 50) id(dp3_secondaire).publish_state(x);'
+
+script:
+  - id: publier_clim
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_consigne) >= 16 && id(g_consigne) <= 31;'
+          then:
+            - climate.template.publish:
+                id: airton_ac
+                target_temperature: !lambda 'return (float) id(g_consigne);'
+      - if:
+          condition:
+            lambda: 'return id(g_mode) >= 0;'
+          then:
+            - climate.template.publish:
+                id: airton_ac
+                mode: !lambda |-
+                  if (!id(g_power)) return climate::CLIMATE_MODE_OFF;
+                  switch (id(g_mode)) {
+                    case 1: return climate::CLIMATE_MODE_COOL;
+                    case 2: return climate::CLIMATE_MODE_DRY;
+                    case 3: return climate::CLIMATE_MODE_HEAT;
+                    case 4: return climate::CLIMATE_MODE_FAN_ONLY;
+                    default: return climate::CLIMATE_MODE_AUTO;
+                  }
+
+# Climate "template" : la plateforme climate tuya d'ESPHome ne gere pas le mode Auto.
+# DP4 : 0 = Auto, 1 = Froid, 2 = Deshumidification, 3 = Chauffage, 4 = Ventilation
+climate:
+  - platform: template
+    id: airton_ac
+    name: "Consigne Climatisation"
+    sensor: temp_ambiante
+    restore_mode: NO_RESTORE
+    supported_modes: ["OFF", AUTO, COOL, DRY, HEAT, FAN_ONLY]
+    visual:
+      min_temperature: 16
+      max_temperature: 31
+      temperature_step: 1
+    set_mode_action:
+      - lambda: |-
+          if (x == climate::CLIMATE_MODE_OFF) {
+            id(tuya_mcu).set_boolean_datapoint_value(1, false);
+            return;
+          }
+          uint8_t v = 0;
+          switch (x) {
+            case climate::CLIMATE_MODE_COOL: v = 1; break;
+            case climate::CLIMATE_MODE_DRY: v = 2; break;
+            case climate::CLIMATE_MODE_HEAT: v = 3; break;
+            case climate::CLIMATE_MODE_FAN_ONLY: v = 4; break;
+            default: v = 0; break;
+          }
+          if (!id(g_power)) id(tuya_mcu).set_boolean_datapoint_value(1, true);
+          id(tuya_mcu).set_enum_datapoint_value(4, v);
+    # IMPORTANT : la carte attend la consigne en DIXIEMES a l'ecriture (210 = 21 °C).
+    # En envoyant 21, l'afficheur de la clim indique "02".
+    set_target_temperature_action:
+      - lambda: 'id(tuya_mcu).set_integer_datapoint_value(2, (uint32_t) lroundf(x * 10.0f));'
+
+select:
+  - platform: tuya
+    name: "Ventilation"
+    enum_datapoint: 5
+    options:
+      0: "Auto"
+      1: "20%"
+      2: "40%"
+      3: "60%"
+      4: "80%"
+      5: "100%"
+      6: "Silent"
+      7: "Turbo"
+  - platform: tuya
+    name: "Balayage Vertical"
+    enum_datapoint: 107
+    options:
+      0: "Off"
+      1: "On"
+      2: "Position 1"
+      3: "Position 2"
+      4: "Position 3"
+      5: "Position 4"
+      6: "Position 5"
+  - platform: tuya
+    name: "Balayage Horizontal"
+    enum_datapoint: 106
+    options:
+      0: "Off"
+      1: "On"
+
+switch:
+  # DP13 en ecriture seule : la clim ne renvoie jamais l'etat de l'ecran
+  - platform: tuya
+    name: "Écran LED"
+    switch_datapoint: 13
+    icon: "mdi:led-on"
+  - platform: tuya
+    name: "Purificateur"
+    switch_datapoint: 110
+    icon: "mdi:air-purifier"
+  - platform: tuya
+    name: "Mode Nuit"
+    switch_datapoint: 109
+    icon: "mdi:weather-night"
+  # DP111 : hors-gel. ON = hors-gel (vu comme Auto 16 °C), OFF = la clim s'ETEINT
+  # (elle ne revient pas a son mode precedent : relancer le mode ensuite).
+  - platform: tuya
+    name: "Hors-gel"
+    switch_datapoint: 111
+    icon: mdi:snowflake-thermometer
+
+sensor:
+  - platform: tuya
+    id: temp_ambiante
+    name: "Température Ambiante"
+    sensor_datapoint: 3
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      # Le DP3 alterne avec une autre valeur (ex. 4) : on ne garde que 5 a 45 °C
+      - lambda: 'if (x < 50 || x > 450) return {}; return x;'
+      - multiply: 0.1
+      - throttle_average: 30s
+      - round: 1
+      - delta: 0.1
+
+  - platform: template
+    id: dp3_secondaire
+    name: "DP3 valeur secondaire (brut)"
+    icon: mdi:help-circle-outline
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    filters:
+      - throttle: 10s
+      - delta: 0.5
+
+  # --- Puissance estimee (la carte ne remonte AUCUNE consommation : DP101-104 = 1) ---
+  # Modele onduleur : mini de modulation a la consigne, maxi a 3 °C d'ecart,
+  # ventilateur seul quand la consigne est depassee de plus de 1 °C.
+  - platform: template
+    id: puissance_estimee
+    name: "Puissance estimée"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: |-
+      if (!id(g_power)) return id(p_veille).state;
+      int m = id(g_mode);
+      if (m == 4) return id(p_ventil).state;
+      float amb = id(temp_ambiante).state;
+      float cons = (float) id(g_consigne);
+      float ecart = 1.0f;
+      if (!isnan(amb) && cons >= 16) {
+        if (m == 3) ecart = cons - amb;
+        else if (m == 1 || m == 2) ecart = amb - cons;
+        else ecart = fabsf(cons - amb);
+      }
+      if (ecart < -1.0f) return id(p_ventil).state;
+      float k = (ecart + 1.0f) / 4.0f;
+      if (k > 1.0f) k = 1.0f;
+      return id(p_mini).state + (id(p_maxi).state - id(p_mini).state) * k;
+
+  - platform: integration
+    name: "Énergie estimée"
+    sensor: puissance_estimee
+    time_unit: h
+    integration_method: left
+    restore: true
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    icon: mdi:lightning-bolt
+    filters:
+      - multiply: 0.001
+
+# Parametres de l'estimation, reglables depuis Home Assistant
+number:
+  - platform: template
+    id: p_mini
+    name: "Estimation - puissance mini"
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 2000
+    step: 10
+    initial_value: 250
+    optimistic: true
+    restore_value: true
+  - platform: template
+    id: p_maxi
+    name: "Estimation - puissance maxi"
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 4000
+    step: 10
+    initial_value: 1200
+    optimistic: true
+    restore_value: true
+  - platform: template
+    id: p_ventil
+    name: "Estimation - ventilateur seul"
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 200
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+  - platform: template
+    id: p_veille
+    name: "Estimation - veille"
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 50
+    step: 1
+    initial_value: 3
+    optimistic: true
+    restore_value: true

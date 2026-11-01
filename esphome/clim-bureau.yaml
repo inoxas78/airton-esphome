@@ -1,0 +1,9 @@
+# Monosplit du bureau : ESP-12E sur un UART logiciel (GPIO14 / GPIO12)
+substitutions:
+  dev_name: clim-bureau
+  dev_friendly: Clim bureau
+  rx_pin: "14"
+  tx_pin: "12"
+
+packages:
+  airton: !include airton-monosplit.yaml

@@ -1,0 +1,515 @@
+# =============================================================================
+#  Orchestrateur chauffage / climatisation : clims Airton + chaudiere gaz (Tado)
+#  + EDF Tempo + presence + surplus solaire.
+#
+#  Package Home Assistant : dans configuration.yaml
+#    homeassistant:
+#      packages: !include_dir_named packages
+#
+#  Entites externes attendues (a adapter) :
+#    - sensor.rte_tempo_couleur_actuelle / sensor.rte_tempo_prochaine_couleur
+#      binary_sensor.rte_tempo_heures_creuses   (integration "RTE Tempo")
+#    - climate.<piece> Tado (une par piece) + sensor.maison_mode_tado (HOME/AWAY)
+#    - person.personne_1 / person.personne_2 (application compagnon)
+#    - sensor.reseau_puissance : puissance au compteur, NEGATIVE en injection
+#    - climate.clim_* : les clims ESPHome (voir dossier esphome/)
+#  Documentation : docs/orchestrateur.md
+# =============================================================================
+
+# ----------------------------------------------------------------- Reglages --
+input_boolean:
+  superviseur_chauffage:
+    name: Superviseur chauffage
+    icon: mdi:robot
+  surplus_solaire:
+    name: Surplus solaire
+    icon: mdi:solar-power-variant
+  presence_calculee:
+    name: Présence calculée
+    icon: mdi:home-account
+
+input_select:
+  saison_clim:
+    name: Saison clim
+    options:
+      - Hiver (chauffage)
+      - Été (climatisation)
+      - Arrêt (mi-saison)
+    initial: Hiver (chauffage)
+    icon: mdi:sun-snowflake-variant
+  mode_presence:
+    name: Mode présence
+    options:
+      - Auto (géolocalisation)
+      - "Forcé : présents"
+      - "Forcé : absents"
+    initial: Auto (géolocalisation)
+    icon: mdi:map-marker-account
+
+input_number:
+  chauffage_consigne_jour:
+    name: Chauffage consigne jour
+    min: 15
+    max: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:sun-thermometer
+  chauffage_consigne_nuit:
+    name: Chauffage consigne nuit
+    min: 15
+    max: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:weather-night
+  chauffage_consigne_absence:
+    name: Chauffage consigne absence
+    min: 15
+    max: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:home-export-outline
+  chauffage_consigne_chambres_journee:
+    name: Chauffage consigne chambres journée
+    min: 15
+    max: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:bed
+  chauffage_prechauffage_veille_rouge:
+    name: Chauffage préchauffage veille rouge
+    min: 0
+    max: 3
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-plus
+  chauffage_anticipation_reveil:
+    name: Chauffage anticipation réveil
+    min: 0
+    max: 180
+    step: 15
+    mode: box
+    unit_of_measurement: min
+    icon: mdi:clock-fast
+  clim_consigne_ete_jour:
+    name: Clim consigne été jour
+    min: 20
+    max: 30
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:snowflake-thermometer
+  clim_consigne_ete_nuit:
+    name: Clim consigne été nuit
+    min: 20
+    max: 30
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:weather-night
+  clim_consigne_ete_absence:
+    name: Clim consigne été absence
+    min: 24
+    max: 32
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:home-export-outline
+
+input_datetime:
+  chauffage_reveil_semaine:
+    name: Chauffage réveil semaine
+    has_time: true
+    initial: "07:00:00"
+  chauffage_reveil_week_end:
+    name: Chauffage réveil week-end
+    has_time: true
+    initial: "08:00:00"
+  chauffage_debut_nuit:
+    name: Chauffage début nuit
+    has_time: true
+    initial: "22:00:00"
+  chauffage_chambres_debut_journee:
+    name: Chauffage chambres début journée
+    has_time: true
+    initial: "09:00:00"
+  chauffage_chambres_fin_journee:
+    name: Chauffage chambres fin journée
+    has_time: true
+    initial: "17:00:00"
+
+# Une derogation par clim : nom = derogation_<object_id de la clim>
+timer:
+  derogation_clim_salon: &derog
+    name: Dérogation clim salon
+    duration: "3:00:00"
+    restore: true
+    icon: mdi:hand-back-right
+  derogation_clim_bureau:
+    <<: *derog
+    name: Dérogation clim bureau
+  derogation_clim_chambre_1:
+    <<: *derog
+    name: Dérogation clim chambre 1
+  derogation_clim_chambre_2:
+    <<: *derog
+    name: Dérogation clim chambre 2
+  derogation_clim_chambre_3:
+    <<: *derog
+    name: Dérogation clim chambre 3
+  derogation_clim_chambre_parents:
+    <<: *derog
+    name: Dérogation clim chambre parents
+
+# ---------------------------------------------------------------- Capteurs ---
+template:
+  - binary_sensor:
+      - name: Présence téléphones
+        unique_id: presence_telephones
+        device_class: presence
+        state: "{{ is_state('person.personne_1','home') or is_state('person.personne_2','home') }}"
+
+      # Auto = presence calculee (fusion Tado + telephones), sinon forcage manuel
+      - name: Présence maison
+        unique_id: presence_maison
+        device_class: presence
+        state: >-
+          {% set m = states('input_select.mode_presence') %}
+          {% if m.startswith('Forcé : présents') %}true
+          {% elif m.startswith('Forcé : absents') %}false
+          {% else %}{{ is_state('input_boolean.presence_calculee','on') }}{% endif %}
+
+  - sensor:
+      # Qui chauffe : clims (pompe a chaleur) sauf jours ROUGES en heures pleines -> gaz
+      - name: Chauffage source active
+        unique_id: chauffage_source_active
+        state: >-
+          {% set s = states('input_select.saison_clim') %}
+          {% set c = states('sensor.rte_tempo_couleur_actuelle') %}
+          {% set hc = is_state('binary_sensor.rte_tempo_heures_creuses','on') %}
+          {% if s.startswith('Été') %}Clim été
+          {% elif s.startswith('Arrêt') %}Arrêt
+          {% elif c == 'Rouge' and not hc %}Gaz (Tado)
+          {% else %}Clim chauffage{% endif %}
+
+      # Consigne commune : jour / nuit / absence, anticipation du reveil,
+      # +1,5 °C de 4 h a 6 h (heures creuses) la veille d'un jour rouge,
+      # -1 °C l'ete quand il y a du surplus solaire.
+      - name: Chauffage consigne cible
+        unique_id: chauffage_consigne_cible
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        state: >-
+          {% set n = now() %}
+          {% set ete = states('input_select.saison_clim').startswith('Été') %}
+          {% set present = is_state('binary_sensor.presence_maison','on') %}
+          {% set we = n.weekday() >= 5 %}
+          {% set rev = states('input_datetime.chauffage_reveil_week_end') if we else states('input_datetime.chauffage_reveil_semaine') %}
+          {% set debut_jour = today_at(rev) - timedelta(minutes=0 if ete else states('input_number.chauffage_anticipation_reveil')|int(60)) %}
+          {% set debut_nuit = today_at(states('input_datetime.chauffage_debut_nuit')) %}
+          {% set jour = debut_jour <= n < debut_nuit %}
+          {% if ete %}
+            {% if not present %}{% set base = states('input_number.clim_consigne_ete_absence')|float(28) %}
+            {% elif jour %}{% set base = states('input_number.clim_consigne_ete_jour')|float(26) %}
+            {% else %}{% set base = states('input_number.clim_consigne_ete_nuit')|float(25) %}{% endif %}
+            {% set bonus = -1 if (present and is_state('input_boolean.surplus_solaire','on')) else 0 %}
+          {% else %}
+            {% if not present %}{% set base = states('input_number.chauffage_consigne_absence')|float(17) %}
+            {% elif jour %}{% set base = states('input_number.chauffage_consigne_jour')|float(20) %}
+            {% else %}{% set base = states('input_number.chauffage_consigne_nuit')|float(18) %}{% endif %}
+            {% set boost = present and is_state('binary_sensor.rte_tempo_heures_creuses','on')
+                           and states('sensor.rte_tempo_prochaine_couleur') == 'Rouge' and 4 <= n.hour < 6 %}
+            {% set bonus = states('input_number.chauffage_prechauffage_veille_rouge')|float(1.5) if boost else 0 %}
+          {% endif %}
+          {{ (base + bonus) | round(1) }}
+
+      # Chambres : consigne specifique en journee (ex. 19 °C de 9 h a 17 h) quand on est la
+      - name: Chauffage consigne chambres
+        unique_id: chauffage_consigne_chambres
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        state: >-
+          {% set c = states('sensor.chauffage_consigne_cible') | float(0) %}
+          {% set ete = states('input_select.saison_clim').startswith('Été') %}
+          {% set present = is_state('binary_sensor.presence_maison','on') %}
+          {% set n = now() %}
+          {% set journee = today_at(states('input_datetime.chauffage_chambres_debut_journee')) <= n
+                           < today_at(states('input_datetime.chauffage_chambres_fin_journee')) %}
+          {{ (states('input_number.chauffage_consigne_chambres_journee') | float(19)) if (not ete and present and journee) else c }}
+
+# ----------------------------------------------------------- Automatisations --
+automation:
+  - id: chauffage_superviseur_tempo
+    alias: "Chauffage : superviseur clim / gaz (Tempo)"
+    description: >-
+      Hiver : clims en chauffage, sauf jours rouges 6h-22h (clims arretees, Tado auto au gaz) ;
+      Tado arrete quand les clims chauffent. Ete : Tado arrete, clims en climatisation
+      (monosplits en Auto, bi-splits en Froid pour eviter les conflits de mode sur le groupe
+      exterieur partage). Arret : clims eteintes, Tado en auto. Pieces en derogation ignorees.
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.chauffage_source_active
+          - sensor.chauffage_consigne_cible
+          - sensor.chauffage_consigne_chambres
+      - trigger: state
+        entity_id: input_boolean.superviseur_chauffage
+        to: "on"
+      - trigger: event
+        event_type: timer.finished
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.superviseur_chauffage
+        state: "on"
+      - condition: template
+        value_template: >-
+          {{ states('sensor.chauffage_source_active') in ['Clim chauffage','Gaz (Tado)','Clim été','Arrêt']
+             and states('sensor.chauffage_consigne_cible') | is_number }}
+    actions:
+      - variables:
+          source: "{{ states('sensor.chauffage_source_active') }}"
+          cible: "{{ states('sensor.chauffage_consigne_cible') | float }}"
+          cible_ch: "{{ states('sensor.chauffage_consigne_chambres') | float(0) }}"
+          # Une ligne par piece : clim, vanne/thermostat Tado de la meme piece, derogation, type
+          pieces:
+            - { clim: climate.clim_salon, tado: climate.salon, timer: timer.derogation_clim_salon, type: mono }
+            - { clim: climate.clim_bureau, tado: climate.bureau, timer: timer.derogation_clim_bureau, type: mono }
+            - { clim: climate.clim_chambre_1, tado: climate.chambre_1, timer: timer.derogation_clim_chambre_1, type: bi }
+            - { clim: climate.clim_chambre_2, tado: climate.chambre_2, timer: timer.derogation_clim_chambre_2, type: bi }
+            - { clim: climate.clim_chambre_3, tado: climate.chambre_3, timer: timer.derogation_clim_chambre_3, type: bi }
+            - { clim: climate.clim_chambre_parents, tado: climate.chambre_parents, timer: timer.derogation_clim_chambre_parents, type: bi }
+      - repeat:
+          for_each: "{{ pieces }}"
+          sequence:
+            - if:
+                - condition: template
+                  value_template: "{{ not is_state(repeat.item.timer, 'active') }}"
+              then:
+                - choose:
+                    # Gaz ou arret : clims coupees, Tado reprend la main (mode auto)
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ source == 'Gaz (Tado)' or source == 'Arrêt' }}"
+                      sequence:
+                        - if:
+                            - condition: template
+                              value_template: "{{ not is_state(repeat.item.clim, 'off') }}"
+                          then:
+                            - action: climate.set_hvac_mode
+                              target: { entity_id: "{{ repeat.item.clim }}" }
+                              data: { hvac_mode: "off" }
+                        - if:
+                            - condition: template
+                              value_template: "{{ not is_state(repeat.item.tado, 'auto') }}"
+                          then:
+                            - action: climate.set_hvac_mode
+                              target: { entity_id: "{{ repeat.item.tado }}" }
+                              data: { hvac_mode: auto }
+                    # Clim chauffage : Tado coupe, clims a la consigne (chambres : consigne chambres)
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ source == 'Clim chauffage' }}"
+                      sequence:
+                        - if:
+                            - condition: template
+                              value_template: "{{ not is_state(repeat.item.tado, 'off') }}"
+                          then:
+                            - action: climate.set_hvac_mode
+                              target: { entity_id: "{{ repeat.item.tado }}" }
+                              data: { hvac_mode: "off" }
+                        - variables:
+                            t: "{{ ((cible_ch if (repeat.item.type == 'bi' and cible_ch > 0) else cible)) | round(0, 'ceil') }}"
+                        - if:
+                            - condition: template
+                              value_template: >-
+                                {{ not is_state(repeat.item.clim, 'heat')
+                                   or state_attr(repeat.item.clim, 'temperature') | float(0) != t | float }}
+                          then:
+                            - action: climate.set_temperature
+                              target: { entity_id: "{{ repeat.item.clim }}" }
+                              data: { hvac_mode: heat, temperature: "{{ t }}" }
+                            - delay: { seconds: 2 }
+                    # Ete : Tado coupe, monosplits en Auto, bi-splits en Froid
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ source == 'Clim été' }}"
+                      sequence:
+                        - if:
+                            - condition: template
+                              value_template: "{{ not is_state(repeat.item.tado, 'off') }}"
+                          then:
+                            - action: climate.set_hvac_mode
+                              target: { entity_id: "{{ repeat.item.tado }}" }
+                              data: { hvac_mode: "off" }
+                        - variables:
+                            t: "{{ cible | round(0) }}"
+                            m: "{{ 'auto' if repeat.item.type == 'mono' else 'cool' }}"
+                        - if:
+                            - condition: template
+                              value_template: >-
+                                {{ not is_state(repeat.item.clim, m)
+                                   or state_attr(repeat.item.clim, 'temperature') | float(0) != t | float }}
+                          then:
+                            - action: climate.set_temperature
+                              target: { entity_id: "{{ repeat.item.clim }}" }
+                              data: { hvac_mode: "{{ m }}", temperature: "{{ t }}" }
+                            - delay: { seconds: 2 }
+    mode: queued
+    max: 3
+
+  # Un reglage manuel d'une clim (fait par un utilisateur dans HA) suspend le superviseur
+  # pour cette piece pendant 3 h. Fin anticipee : timer.finish sur la derogation.
+  - id: chauffage_derogation_clim
+    alias: "Chauffage : dérogation manuelle clim (3 h)"
+    triggers:
+      - trigger: event
+        event_type: call_service
+        event_data:
+          domain: climate
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set ids = trigger.event.data.service_data.entity_id | default([]) %}
+          {% set ids = [ids] if ids is string else ids %}
+          {{ trigger.event.context.user_id is not none and ids | select('match', 'climate\\.clim_') | list | count > 0 }}
+    actions:
+      - variables:
+          ids: >-
+            {% set ids = trigger.event.data.service_data.entity_id %}{{ [ids] if ids is string else ids }}
+      - repeat:
+          for_each: "{{ ids | select('match','climate\\.clim_') | list }}"
+          sequence:
+            - action: timer.start
+              target:
+                entity_id: "{{ 'timer.derogation_' ~ repeat.item.split('.')[1] }}"
+    mode: parallel
+
+  # Ete : -1 °C gratuit quand on injecte > 800 W pendant 10 min
+  - id: energie_surplus_solaire
+    alias: "Énergie : détection surplus solaire"
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.reseau_puissance
+        below: -800
+        for: { minutes: 10 }
+        id: "on"
+      - trigger: numeric_state
+        entity_id: sensor.reseau_puissance
+        above: -100
+        for: { minutes: 10 }
+        id: "off"
+    actions:
+      - action: "input_boolean.turn_{{ trigger.id }}"
+        target:
+          entity_id: input_boolean.surplus_solaire
+    mode: single
+
+  # Geolocalisation Tado activable / forcable depuis Home Assistant
+  - id: presence_mode_tado
+    alias: "Présence : appliquer le mode (géolocalisation / forçage) à Tado"
+    triggers:
+      - trigger: state
+        entity_id: input_select.mode_presence
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          p: >-
+            {% set m = states('input_select.mode_presence') %}
+            {{ 'home' if m.startswith('Forcé : présents') else ('away' if m.startswith('Forcé : absents') else 'auto') }}
+      - if:
+          - condition: template
+            value_template: "{{ state_attr('climate.salon','preset_mode') != p }}"
+        then:
+          - action: climate.set_preset_mode
+            target:
+              entity_id: climate.salon      # n'importe quelle piece Tado : le preset est global
+            data:
+              preset_mode: "{{ p }}"
+    mode: restart
+
+  # Tado detecte parfois les arrivees avec du retard : on fusionne avec les telephones,
+  # le dernier changement (presence comme absence) l'emporte.
+  - id: presence_fusion_tado_telephones
+    alias: "Présence : fusion Tado + téléphones (le dernier changement l'emporte)"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.presence_telephones
+        from: ["on", "off"]
+        to: ["on", "off"]
+        id: tel
+      - trigger: state
+        entity_id: sensor.maison_mode_tado
+        to: ["HOME", "AWAY"]
+        id: tado
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
+    actions:
+      - variables:
+          present: "{{ trigger.to_state.state in ['on','HOME'] }}"
+      - action: "{{ 'input_boolean.turn_on' if present else 'input_boolean.turn_off' }}"
+        target:
+          entity_id: input_boolean.presence_calculee
+      - action: logbook.log
+        data:
+          name: Présence
+          message: >-
+            {{ ('présents' if present else 'absents') ~ ' (détecté par ' ~ ('les téléphones' if trigger.id == 'tel' else 'Tado') ~ ')' }}
+          entity_id: binary_sensor.presence_maison
+    mode: queued
+
+# ------------------------------------------------------------------ Scripts ---
+script:
+  reprendre_pilotage_clims:
+    alias: Reprendre le pilotage automatique des clims
+    icon: mdi:robot-happy
+    description: >-
+      Annule toutes les derogations manuelles (minuteurs de 3 h) et relance le
+      superviseur pour remettre chaque clim a la consigne cible.
+    mode: single
+    sequence:
+      - action: timer.cancel
+        target:
+          entity_id:
+            - timer.derogation_clim_salon
+            - timer.derogation_clim_bureau
+            - timer.derogation_clim_chambre_1
+            - timer.derogation_clim_chambre_2
+            - timer.derogation_clim_chambre_3
+            - timer.derogation_clim_chambre_parents
+      - delay: { seconds: 1 }
+      - action: automation.trigger
+        target:
+          entity_id: automation.chauffage_superviseur_clim_gaz_tempo
+        data:
+          skip_condition: false
+
+# Consommation du jour par clim (badges du tableau de bord)
+utility_meter:
+  clim_salon_conso_jour:
+    source: sensor.clim_salon_energie_estimee
+    cycle: daily
+  clim_bureau_conso_jour:
+    source: sensor.clim_bureau_energie_estimee
+    cycle: daily
+  clim_chambre_1_conso_jour:
+    source: sensor.clim_bisplit_1_energie_consommee
+    cycle: daily
+  clim_chambre_2_conso_jour:
+    source: sensor.clim_bisplit_2_energie_consommee
+    cycle: daily
+  clim_chambre_3_conso_jour:
+    source: sensor.clim_bisplit_3_energie_consommee
+    cycle: daily
+  clim_chambre_parents_conso_jour:
+    source: sensor.clim_bisplit_4_energie_consommee
+    cycle: daily

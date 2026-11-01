@@ -1,0 +1,9 @@
+# Monosplit du salon : ESP-12E sur l'UART materiel (GPIO1 / GPIO3)
+substitutions:
+  dev_name: clim-salon
+  dev_friendly: Clim salon
+  rx_pin: "1"
+  tx_pin: "3"
+
+packages:
+  airton: !include airton-monosplit.yaml

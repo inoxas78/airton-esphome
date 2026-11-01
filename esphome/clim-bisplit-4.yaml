@@ -1,0 +1,9 @@
+# Unite interieure bi-split n°4 : ESP32 sur l'UART2 (TX GPIO17 / RX GPIO16)
+substitutions:
+  dev_name: clim-bisplit-4
+  dev_friendly: Clim bisplit 4
+  TX: GPIO17
+  RX: GPIO16
+
+packages:
+  airton: !include airton-bisplit.yaml
