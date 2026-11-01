@@ -2,7 +2,7 @@
 
 Piloter des climatisations **Airton** (monosplits et bi-splits) en local depuis Home Assistant, **sans les dongles Wi-Fi Airton** (≈ 99 € pièce) et sans cloud, avec un simple ESP8266 / ESP32 sous ESPHome.
 
-Le dépôt contient aussi un **orchestrateur de chauffage** complet : clims (pompe à chaleur) + chaudière gaz pilotée par Tado, en fonction du tarif **EDF Tempo**, de la **présence** et du **surplus solaire**. Ainsi que la gestion énergie associée : batterie, chauffe-eau, EMHASS. L'histoire du projet est racontée dans le [journal](docs/journal.md).
+Le dépôt contient aussi un **superviseur de chauffage** pour Home Assistant (voir [la section dédiée](#le-superviseur-de-chauffage)). Il décide en permanence qui chauffe, les clims (pompes à chaleur) ou la chaudière gaz pilotée par Tado, et à quelle température, selon le tarif **EDF Tempo**, la **présence** et le **surplus solaire**. S'y ajoute la gestion de l'énergie : batterie, chauffe-eau, EMHASS. L'histoire du projet est racontée dans le [journal](docs/journal.md).
 
 > Projet personnel, testé sur 2 monosplits et un groupe extérieur bi-split alimentant 4 unités intérieures. Aucune affiliation avec Airton. Ouvrir une clim et y brancher un montage maison se fait à vos risques.
 
@@ -17,6 +17,59 @@ Le dépôt contient aussi un **orchestrateur de chauffage** complet : clims (pom
 | Température ambiante | ✅ (sonde du split) | ✅ (sonde du split) |
 | Consommation | ⚠️ **estimée** (la carte ne la fournit pas) | ✅ **compteur réel** de l'unité (pas de 0,1 kWh) |
 | Couper le bip | ❌ impossible par le Wi-Fi | ✅ commande silencieuse |
+
+## Le superviseur de chauffage
+
+C'est le cerveau de l'installation : l'automatisation **`chauffage_superviseur_tempo`**, dans [`homeassistant/packages/chauffage_superviseur.yaml`](homeassistant/packages/chauffage_superviseur.yaml). À chaque changement de source, de consigne, de fin de dérogation, et au démarrage de Home Assistant, il repasse sur chaque pièce et applique la règle suivante :
+
+| Situation (`sensor.chauffage_source_active`) | Clims | Chaudière gaz (Tado) |
+|---|---|---|
+| **Hiver**, sauf heures pleines d'un jour rouge → « Clim chauffage » | chauffage à la consigne cible (chambres : consigne chambres) | **arrêtée** |
+| **Hiver, jour rouge de 6 h à 22 h** → « Gaz (Tado) » | **éteintes** | **auto** : Tado gère seul, avec son anticipation et sa géolocalisation |
+| **Été** → « Clim été » | monosplits en **Auto**, bi-splits en **Froid** | arrêtée |
+| **Arrêt** (mi-saison) | éteintes | auto |
+
+La consigne (`sensor.chauffage_consigne_cible`) suit ces règles :
+
+- **jour**, **nuit** ou **absence** selon la présence, toutes réglables (ici 22, 18 et 16 °C) ;
+- le confort démarre **avant le réveil** : 7 h en semaine, 8 h le week-end, avec une anticipation réglable ;
+- **+1,5 °C de 4 h à 6 h** (heures creuses) la veille d'un jour rouge, pour stocker de la chaleur ;
+- les **chambres** ont une consigne propre en journée (19 °C de 9 h à 17 h quand on est là) ;
+- **l'été**, consignes été (26, 25 ou 28 °C selon jour, nuit ou absence), **−1 °C en cas de surplus solaire**.
+
+Ce qu'il respecte :
+
+- une clim réglée à la main dans Home Assistant passe en **dérogation pendant 3 h** et le superviseur ne la touche plus. Le bouton « Tout en auto » rend la main à toutes les pièces ;
+- il n'envoie un ordre **que si l'état diffère**, avec 2 s entre deux clims ;
+- un interrupteur général (`input_boolean.superviseur_chauffage`) le met en pause.
+
+### Ses dépendances
+
+**À installer :**
+
+- **ESPHome** (les clims de ce dépôt) ;
+- **Tado** (une entité `climate` par pièce, plus `sensor.maison_mode_tado`) ;
+- **RTE Tempo** (HACS : couleur du jour, du lendemain, heures creuses) ;
+- l'**application compagnon** (`person.*`) ;
+- un **compteur électrique** qui donne `sensor.reseau_puissance` en W, négatif en injection.
+
+**Fournies par les packages de ce dépôt, à copier ensemble :**
+
+| Fichier | Contenu |
+|---|---|
+| [`chauffage_superviseur.yaml`](homeassistant/packages/chauffage_superviseur.yaml) | le superviseur ; l'interrupteur général, la saison, les consignes et les horaires ; les 3 capteurs de décision (source active, consigne cible, consigne chambres) ; les minuteurs et l'automatisation de dérogation ; la détection du surplus solaire ; le script « Tout en auto » |
+| [`presence.yaml`](homeassistant/packages/presence.yaml) | `binary_sensor.presence_maison` : fusion Tado + téléphones (le dernier changement l'emporte) et forçage présents / absents |
+| [`clims_conso.yaml`](homeassistant/packages/clims_conso.yaml) | consommation du jour par clim (pour le tableau de bord) |
+
+**À adapter :** la **table des pièces**, en tête du superviseur. Une ligne par pièce : la clim, la vanne Tado de la même pièce, le minuteur de dérogation et le type `mono` ou `bi` :
+
+```yaml
+pieces:
+  - { clim: climate.clim_salon,     tado: climate.salon,     timer: timer.derogation_clim_salon,     type: mono }
+  - { clim: climate.clim_chambre_1, tado: climate.chambre_1, timer: timer.derogation_clim_chambre_1, type: bi }
+```
+
+Détail de chaque entité et graphe des dépendances : [docs/dependances.md](docs/dependances.md). Logique complète : [docs/orchestrateur.md](docs/orchestrateur.md).
 
 ## Contenu
 
