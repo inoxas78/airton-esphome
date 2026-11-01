@@ -1,0 +1,39 @@
+# Extrait de configuration.yaml : enregistreur allege.
+# Moins d'ecritures sur le SSD, base plus petite, sauvegardes plus rapides.
+# Les capteurs d'energie, de chauffage et ceux utilises par EMHASS restent enregistres.
+recorder:
+  purge_keep_days: 10
+  commit_interval: 5
+  exclude:
+    entity_globs:
+      - sensor.*_rssi
+      - sensor.*_uptime
+      - sensor.*_heap_*
+      - sensor.*_free_ram
+      - sensor.*_esp_temperature
+      - sensor.*_wifi_signal
+      - sensor.*_wifi_strength
+      - sensor.*_power_factor
+      - sensor.shellyem_*_voltage
+      - sensor.*_still_energy        # radars de presence LD2410 : tres bavards
+      - sensor.*_move_energy
+      - sensor.*_moving_energy
+      - sensor.*_still_distance
+      - sensor.*_moving_distance
+      - sensor.*_detection_distance
+      - sensor.*_target?_*
+      - sensor.unpaired_estimated_distance*
+      - sensor.awtrix_*_current_app
+      - sensor.load_*m
+      - button.*_info
+    entities:
+      - sensor.memory_free
+      - sensor.memory_use_percent
+      - sensor.processor_use
+
+# Le niveau debug sur les automatisations remplit le journal tres vite
+logger:
+  default: warning
+  logs:
+    homeassistant.components.automation: warning
+    homeassistant.helpers.script: warning

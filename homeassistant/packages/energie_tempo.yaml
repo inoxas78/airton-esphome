@@ -1,0 +1,433 @@
+# =============================================================================
+#  Energie : EDF Tempo + batterie domestique (Huawei) + chauffe-eau + EMHASS
+#  Package Home Assistant, complementaire de clims_orchestrateur.yaml.
+#  Documentation : docs/energie.md
+#
+#  Entites externes attendues (a adapter) :
+#    - integration "RTE Tempo"  : sensor.rte_tempo_couleur_actuelle / _prochaine_couleur,
+#                                 binary_sensor.rte_tempo_heures_creuses
+#    - integration "Tarif EDF"  : sensor.tarif_<bleu|blanc|rouge>_tempo_heures_<creuses|pleines>_ttc
+#    - sensor.reseau_puissance  : puissance au compteur (W), NEGATIVE en injection
+#    - sensor.conso_jour_kwh    : consommation electrique du jour (kWh)
+#    - Huawei Solar             : sensor.batteries_etat_de_la_capacite, select.batteries_mode_de_fonctionnement,
+#                                 switch.batteries_charge_depuis_le_reseau, actions huawei_solar.*
+#    - Solcast / Forecast.Solar : previsions de production
+#    - switch.prise_chauffe_eau : prise connectee du ballon electrique
+#    - input_number.stock_energie_ballon (kWh) et input_number.temperature_eau_chaude_reelle (°C) :
+#      estimation du stock d'eau chaude (calculee ailleurs, ex. debitmetres ESPHome)
+# =============================================================================
+
+input_boolean:
+  statut_charge_forcee:
+    name: Statut charge forcée batterie
+    icon: mdi:battery-charging-high
+  chauffe_eau_nuit_programme:
+    name: Chauffe-eau programmé la nuit
+    icon: mdi:water-boiler
+
+# ------------------------------------------------------------- EMHASS ---------
+# Calcul + publication uniquement : EMHASS ne pilote rien, ses capteurs servent d'aide
+# a la decision. Les prix Tempo reels (48 demi-heures) sont injectes a chaque calcul.
+rest_command:
+  emhass_cache_meteo:
+    url: "http://5b918bf2-emhass:5000/action/weather-forecast-cache"
+    method: post
+    content_type: "application/json"
+    payload: "{}"
+  emhass_mpc:
+    url: "http://5b918bf2-emhass:5000/action/naive-mpc-optim"
+    method: post
+    timeout: 120
+    content_type: "application/json"
+    payload: >-
+      {%- set start = now().replace(second=0, microsecond=0) - timedelta(minutes=now().minute % 30) -%}
+      {%- set jour0 = (now() - timedelta(hours=6)).date() -%}
+      {%- set c0 = states('sensor.tarif_tempo_couleur_aujourd_hui') -%}
+      {%- set c0 = c0 if c0 in ['bleu','blanc','rouge'] else 'blanc' -%}
+      {%- set c1 = states('sensor.tarif_tempo_couleur_demain') -%}
+      {%- set c1 = c1 if c1 in ['bleu','blanc','rouge'] else 'blanc' -%}
+      {%- set ns = namespace(p=[]) -%}
+      {%- for i in range(48) -%}
+        {%- set t = start + timedelta(minutes=30*i) -%}
+        {#- un "jour Tempo" va de 6 h a 6 h -#}
+        {%- set c = c0 if (t - timedelta(hours=6)).date() == jour0 else c1 -%}
+        {%- set hc = t.hour < 6 or t.hour >= 22 -%}
+        {%- set ns.p = ns.p + [states('sensor.tarif_' ~ c ~ '_tempo_heures_' ~ ('creuses' if hc else 'pleines') ~ '_ttc') | float(0.2)] -%}
+      {%- endfor -%}
+      {"prediction_horizon": 48,
+       "weather_forecast_cache_only": true,
+       "soc_init": {{ (states('sensor.batteries_etat_de_la_capacite') | float(50)) / 100 }},
+       "soc_final": 0.3,
+       "load_cost_forecast": {{ ns.p | tojson }}}
+  emhass_publish:
+    url: "http://5b918bf2-emhass:5000/action/publish-data"
+    method: post
+    content_type: "application/json"
+    payload: "{}"
+
+# ------------------------------------------------------------ Capteurs --------
+template:
+  - sensor:
+      - name: EDF Tempo Prix Actuel
+        unique_id: edf_tempo_prix_actuel
+        device_class: monetary
+        unit_of_measurement: "c€/kWh"
+        icon: mdi:cash-check
+        availability: >-
+          {{ states('sensor.rte_tempo_couleur_actuelle') in ['Bleu','Blanc','Rouge']
+             and states('binary_sensor.rte_tempo_heures_creuses') in ['on','off'] }}
+        state: >-
+          {% set c = states('sensor.rte_tempo_couleur_actuelle') | lower %}
+          {% set p = 'creuses' if is_state('binary_sensor.rte_tempo_heures_creuses','on') else 'pleines' %}
+          {{ (states('sensor.tarif_' ~ c ~ '_tempo_heures_' ~ p ~ '_ttc') | float(0) * 100) | round(2) }}
+
+      # Prix de la prochaine periode : en HC -> HP du jour suivant ; en HP -> HC du jour en cours
+      - name: EDF Tempo Prochain Prix
+        unique_id: edf_tempo_prochain_prix
+        device_class: monetary
+        unit_of_measurement: "c€/kWh"
+        icon: mdi:cash-clock
+        availability: >-
+          {{ states('sensor.rte_tempo_couleur_actuelle') in ['Bleu','Blanc','Rouge']
+             and states('sensor.rte_tempo_prochaine_couleur') in ['Bleu','Blanc','Rouge'] }}
+        state: >-
+          {% if is_state('binary_sensor.rte_tempo_heures_creuses','on') %}
+            {% set c = states('sensor.rte_tempo_prochaine_couleur') | lower %}{% set p = 'pleines' %}
+          {% else %}
+            {% set c = states('sensor.rte_tempo_couleur_actuelle') | lower %}{% set p = 'creuses' %}
+          {% endif %}
+          {{ (states('sensor.tarif_' ~ c ~ '_tempo_heures_' ~ p ~ '_ttc') | float(0) * 100) | round(2) }}
+
+      # Nombre d'heures ou la production prevue demain depasse 4 kW (Solcast)
+      - name: Heures de soleil demain
+        unique_id: heures_soleil_demain
+        unit_of_measurement: h
+        state: >-
+          {% set seuil_kw = 4.0 %}
+          {% set f = state_attr('sensor.solcast_pv_forecast_previsions_pour_demain', 'detailedForecast') %}
+          {% set ns = namespace(h=0) %}
+          {% for i in f or [] %}{% if i.pv_estimate is defined and i.pv_estimate > seuil_kw %}{% set ns.h = ns.h + 0.5 %}{% endif %}{% endfor %}
+          {{ ns.h }}
+
+  - switch:
+      # Charge forcee de la batterie depuis le reseau (3 kW jusqu'a 100 %)
+      - name: Charge Forcée 3kW
+        unique_id: charge_forcee_3kw_switch
+        state: "{{ is_state('input_boolean.statut_charge_forcee', 'on') }}"
+        turn_on:
+          - action: switch.turn_on
+            target: { entity_id: switch.batteries_charge_depuis_le_reseau }
+          - action: huawei_solar.forcible_charge_soc
+            data: { device_id: VOTRE_DEVICE_ID_BATTERIE, target_soc: 100, power: 3000 }
+          - action: input_boolean.turn_on
+            target: { entity_id: input_boolean.statut_charge_forcee }
+        turn_off:
+          - action: huawei_solar.stop_forcible_charge
+            data: { device_id: VOTRE_DEVICE_ID_BATTERIE }
+          - action: input_boolean.turn_off
+            target: { entity_id: input_boolean.statut_charge_forcee }
+          - action: switch.turn_off
+            target: { entity_id: switch.batteries_charge_depuis_le_reseau }
+
+# ------------------------------------------------------- Automatisations ------
+automation:
+  - id: emhass_calcul_publication
+    alias: "EMHASS – Calcul et publication (sans pilotage)"
+    description: >-
+      Rafraichit la meteo 2x/jour, recalcule le plan EMHASS toutes les 30 min avec les prix
+      Tempo reels et publie les capteurs. Ne commande AUCUN appareil.
+    triggers:
+      - { trigger: time, at: "05:30:00", id: meteo }
+      - { trigger: time, at: "13:00:00", id: meteo }
+      - { trigger: time_pattern, minutes: "/30", id: mpc }
+    actions:
+      - if:
+          - condition: trigger
+            id: meteo
+        then:
+          - action: rest_command.emhass_cache_meteo
+            continue_on_error: true
+          - delay: { seconds: 20 }
+      - action: rest_command.emhass_mpc
+        continue_on_error: true
+      - delay: { seconds: 10 }
+      - action: rest_command.emhass_publish
+        continue_on_error: true
+    mode: queued
+    max: 3
+
+  # Batterie : la veille d'un jour rouge, charge a 100 % en heures creuses (22 h - 6 h) ;
+  # en journee rouge (ou blanc avant rouge), sauvetage si la batterie passe sous 6,5 % ;
+  # a 6 h, retour en autoconsommation.
+  - id: batterie_charge_tempo
+    alias: "Batterie : charge Tempo rouge + heures creuses"
+    triggers:
+      - { trigger: time, at: "22:00:00", id: charge_nuit_start }
+      - { trigger: time, at: "06:00:00", id: charge_nuit_stop }
+      - { trigger: time_pattern, minutes: "0", id: maintenance_nuit }
+      - { trigger: time_pattern, minutes: "30", id: maintenance_nuit }
+      - { trigger: numeric_state, entity_id: sensor.batteries_etat_de_la_capacite, below: 6.5, id: securite_basse }
+      - { trigger: homeassistant, event: start, id: check_demarrage }
+    actions:
+      - choose:
+          - conditions:
+              - condition: time
+                after: "22:00:00"
+                before: "06:00:00"
+              - condition: state
+                entity_id: sensor.rte_tempo_prochaine_couleur
+                state: Rouge
+            sequence:
+              - action: select.select_option
+                target: { entity_id: select.batteries_mode_de_fonctionnement }
+                data: { option: fixed_charge_discharge }
+              - action: switch.turn_on
+                target: { entity_id: switch.batteries_charge_depuis_le_reseau }
+              - action: huawei_solar.forcible_charge_soc
+                data: { device_id: VOTRE_DEVICE_ID_BATTERIE, target_soc: 100, power: 3000 }
+              - action: input_boolean.turn_on
+                target: { entity_id: input_boolean.statut_charge_forcee }
+          - conditions:
+              - condition: time
+                after: "06:00:00"
+                before: "22:00:00"
+              - condition: numeric_state
+                entity_id: sensor.batteries_etat_de_la_capacite
+                below: 6.5
+              - condition: state
+                entity_id: sensor.rte_tempo_prochaine_couleur
+                state: Rouge
+              - condition: state
+                entity_id: sensor.rte_tempo_couleur_actuelle
+                state: [Rouge, Blanc]
+            sequence:
+              - action: switch.turn_on
+                target: { entity_id: switch.batteries_charge_depuis_le_reseau }
+              - action: huawei_solar.forcible_charge_soc
+                data: { device_id: VOTRE_DEVICE_ID_BATTERIE, target_soc: 13, power: 500 }
+              - action: logbook.log
+                data: { name: Batterie, message: "Sauvetage niveau bas (<6,5 %) activé (jour critique)." }
+          - conditions:
+              - condition: or
+                conditions:
+                  - condition: trigger
+                    id: charge_nuit_stop
+                  - condition: and
+                    conditions:
+                      - condition: time
+                        after: "06:00:00"
+                        before: "22:00:00"
+                      - condition: numeric_state
+                        entity_id: sensor.batteries_etat_de_la_capacite
+                        above: 12.5
+            sequence:
+              - action: huawei_solar.stop_forcible_charge
+                data: { device_id: VOTRE_DEVICE_ID_BATTERIE }
+              - action: input_boolean.turn_off
+                target: { entity_id: input_boolean.statut_charge_forcee }
+              - action: switch.turn_off
+                target: { entity_id: switch.batteries_charge_depuis_le_reseau }
+              - delay: "00:00:05"
+              - action: select.select_option
+                target: { entity_id: select.batteries_mode_de_fonctionnement }
+                data: { option: maximise_self_consumption }
+    mode: restart
+
+  # Chauffe-eau electrique : decision a 22 h (chauffe de nuit ou pas) selon le stock d'eau
+  # chaude, la meteo et le solaire du lendemain, la couleur Tempo ; chauffe sur surplus
+  # solaire en journee ; nombreuses securites (stock bas apres un bain, batterie < 40 %,
+  # ballon plein, 4 h de chauffe max par jour).
+  - id: chauffe_eau_pilote
+    alias: "Chauffe-eau : pilote Tempo + météo + solaire"
+    triggers:
+      - { trigger: time, at: "22:00:00", id: decision_soir }
+      - { trigger: time, at: "06:00:00", id: turn_off_morning }
+      - { trigger: time, at: "00:00:00", id: urgence_nuit }
+      - { trigger: numeric_state, entity_id: input_number.stock_energie_ballon, below: 10.5, id: urgence_nuit }
+      - { trigger: numeric_state, entity_id: sensor.reseau_puissance, below: -1000, for: { minutes: 2 }, id: surplus_start }
+      - { trigger: numeric_state, entity_id: sensor.reseau_puissance, above: 500, for: { minutes: 10 }, id: surplus_stop }
+      - { trigger: numeric_state, entity_id: sensor.batteries_etat_de_la_capacite, below: 40, for: { minutes: 1 }, id: battery_protect_critical }
+      - { trigger: numeric_state, entity_id: input_number.stock_energie_ballon, above: 14.5, id: tank_full }
+      - { trigger: numeric_state, entity_id: input_number.temperature_eau_chaude_reelle, above: 58, id: tank_full }
+      - { trigger: numeric_state, entity_id: sensor.chauffe_eau_temps_de_fonctionnement_aujourdhui, above: 4, id: max_runtime_reached }
+    actions:
+      - choose:
+          # Securite nocturne : stock bas apres un bain tardif
+          - conditions:
+              - condition: trigger
+                id: urgence_nuit
+              - condition: time
+                after: "23:59:00"
+                before: "06:00:00"
+              - condition: numeric_state
+                entity_id: input_number.stock_energie_ballon
+                below: 10.5
+            sequence:
+              - action: input_boolean.turn_on
+                target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
+              - action: switch.turn_on
+                target: { entity_id: switch.prise_chauffe_eau }
+              - action: persistent_notification.create
+                data:
+                  title: "Chauffe-eau : sécurité nuit"
+                  message: "Stock à {{ states('input_number.stock_energie_ballon') }} kWh : relance nocturne pour sécuriser le matin."
+          # Decision du soir
+          - conditions:
+              - condition: trigger
+                id: decision_soir
+            sequence:
+              - variables:
+                  stock_actuel: "{{ states('input_number.stock_energie_ballon') | float(0) }}"
+                  solaire_demain: "{{ states('sensor.energy_production_tomorrow') | float(0) }}"
+                  solcast_demain: "{{ states('sensor.solcast_pv_forecast_previsions_pour_demain') | float(0) }}"
+                  conso_totale: "{{ states('sensor.conso_jour_kwh') | float(17) }}"
+                  heures_ce: "{{ states('sensor.chauffe_eau_temps_de_fonctionnement_aujourdhui') | float(0) }}"
+                  couleur_demain: "{{ states('sensor.rte_tempo_prochaine_couleur') }}"
+                  meteo_demain: "{{ states('sensor.weather_condition_future_1') | lower }}"
+                  mois: "{{ now().month }}"
+                  calcul_valide: >-
+                    {{ states('input_number.stock_energie_ballon') | is_number
+                       and states('sensor.weather_condition_future_1') not in ['unknown','unavailable',''] }}
+                  conso_ce: "{{ heures_ce * 2.5 }}"                       # ballon de 2,5 kW
+                  besoin_maison: "{{ [conso_totale - conso_ce, 5] | max }}"
+                  stock_matin_estime: "{{ stock_actuel - 3 }}"            # pertes + douches du soir
+                  solaire_pour_eau: "{{ [solaire_demain - besoin_maison, 0] | max }}"
+                  stock_final_estime: "{{ stock_matin_estime + solaire_pour_eau - 7 }}"
+                  decision_calculee: >-
+                    {% if meteo_demain in ['cloudy','rainy','pouring','snowy','fog'] %}
+                      {{ stock_matin_estime < 14 or stock_final_estime < 13 }}
+                    {% elif meteo_demain == 'sunny' and 3 <= mois <= 10 %}
+                      {{ stock_matin_estime < 6 }}
+                    {% elif meteo_demain == 'partlycloudy' and 3 <= mois <= 10 %}
+                      {{ solcast_demain < 25 and (stock_matin_estime < 10 or stock_final_estime < 12) }}
+                    {% elif couleur_demain == 'Rouge' %}
+                      {{ stock_matin_estime < 10 or stock_final_estime < 10 }}
+                    {% else %}
+                      {{ stock_matin_estime < 8 or stock_final_estime < 12 }}
+                    {% endif %}
+                  decision_finale: "{{ true if not calcul_valide else decision_calculee }}"
+                  message_debug: >-
+                    Capteurs : {{ 'ERREUR, chauffe par sécurité' if not calcul_valide else 'OK' }} ·
+                    Stock {{ stock_actuel }} kWh · Météo J+1 {{ meteo_demain }} · Tempo {{ couleur_demain }} ·
+                    Solcast J+1 {{ solcast_demain }} · Stock matin estimé {{ stock_matin_estime }} kWh ·
+                    Stock soir estimé {{ stock_final_estime }} kWh
+              - if:
+                  - condition: template
+                    value_template: "{{ decision_finale }}"
+                then:
+                  - action: input_boolean.turn_on
+                    target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
+                  - action: switch.turn_on
+                    target: { entity_id: switch.prise_chauffe_eau }
+                  - action: persistent_notification.create
+                    data: { notification_id: chauffe_eau_decision, title: "Chauffe-eau : nuit", message: "{{ message_debug }}" }
+                else:
+                  - action: input_boolean.turn_off
+                    target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
+                  - action: persistent_notification.create
+                    data: { notification_id: chauffe_eau_decision, title: "Chauffe-eau : repos (solaire prévu)", message: "{{ message_debug }}" }
+          # Surplus solaire en journee
+          - conditions:
+              - condition: trigger
+                id: surplus_start
+              - condition: time
+                after: "08:00:00"
+                before: "17:00:00"
+              - condition: numeric_state
+                entity_id: input_number.stock_energie_ballon
+                below: 14.5
+              - condition: numeric_state
+                entity_id: sensor.chauffe_eau_temps_de_fonctionnement_aujourdhui
+                below: 4
+              - condition: numeric_state
+                entity_id: sensor.batteries_etat_de_la_capacite
+                above: 50
+              - condition: numeric_state
+                entity_id: sensor.energy_production_today_remaining
+                above: 2
+            sequence:
+              - action: switch.turn_on
+                target: { entity_id: switch.prise_chauffe_eau }
+              - action: logbook.log
+                data: { name: Chauffe-eau, message: "Démarrage sur surplus (> 1 kW, batterie > 50 %)" }
+          # Arrets
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.statut_charge_forcee
+                state: "off"
+              - condition: or
+                conditions:
+                  - condition: and
+                    conditions:
+                      - condition: trigger
+                        id: surplus_stop
+                      - condition: state
+                        entity_id: input_boolean.chauffe_eau_nuit_programme
+                        state: "off"
+                  - condition: trigger
+                    id: tank_full
+                  - condition: trigger
+                    id: max_runtime_reached
+                  - condition: trigger
+                    id: turn_off_morning
+                  - condition: and
+                    conditions:
+                      - condition: trigger
+                        id: battery_protect_critical
+                      - condition: time
+                        after: "06:00:00"
+                        before: "22:00:00"
+            sequence:
+              - action: switch.turn_off
+                target: { entity_id: switch.prise_chauffe_eau }
+              - action: input_boolean.turn_off
+                target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
+    mode: parallel
+    max: 10
+
+  # Notifications Tempo
+  - id: tempo_notification_demain_rouge
+    alias: "Tempo : notification demain rouge"
+    triggers:
+      - { trigger: time, at: "20:00:00" }
+    conditions:
+      - { condition: state, entity_id: sensor.rte_tempo_prochaine_couleur, state: Rouge }
+    actions:
+      - action: notify.notify
+        data:
+          title: "Demain : Tempo ROUGE"
+          message: "L'électricité sera chère demain. Pensez à lancer les machines cette nuit !"
+          data: { group: tempo-alerte }
+
+  - id: tempo_notification_aujourd_hui_rouge
+    alias: "Tempo : notification aujourd'hui rouge"
+    triggers:
+      - { trigger: time, at: "07:00:00" }
+    conditions:
+      - { condition: state, entity_id: sensor.rte_tempo_couleur_actuelle, state: Rouge }
+    actions:
+      - action: notify.notify
+        data:
+          title: "Tempo ROUGE en cours"
+          message: "Limitez au maximum la consommation aujourd'hui (machines, lave-vaisselle…)."
+          data: { group: tempo-alerte }
+
+  - id: tempo_alerte_surconsommation
+    alias: "Tempo : alerte surconsommation en heures pleines rouges"
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.reseau_puissance
+        above: 1500
+        for: { minutes: 3 }
+    conditions:
+      - { condition: state, entity_id: sensor.rte_tempo_couleur_actuelle, state: Rouge }
+      - { condition: time, after: "06:00:00", before: "22:00:00" }
+    actions:
+      - action: notify.notify
+        data:
+          title: "Surconsommation !"
+          message: >-
+            La maison consomme {{ states('sensor.reseau_puissance') }} W en Tempo rouge.
+            Soit {{ (states('sensor.reseau_puissance') | float(0) * states('sensor.tarif_rouge_tempo_heures_pleines_ttc') | float(0.7295) / 1000) | round(2) }} €/h.
+          data: { tag: tempo_conso_alert }
+    mode: single

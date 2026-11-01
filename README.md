@@ -2,7 +2,7 @@
 
 Piloter des climatisations **Airton** (monosplits et bi-splits) en local depuis Home Assistant, **sans les dongles Wi-Fi Airton** (≈ 99 € pièce) et sans cloud, avec un simple ESP8266 / ESP32 sous ESPHome.
 
-Le dépôt contient aussi un **orchestrateur de chauffage** complet : clims (pompe à chaleur) + chaudière gaz pilotée par Tado, en fonction du tarif **EDF Tempo**, de la **présence** et du **surplus solaire**.
+Le dépôt contient aussi un **orchestrateur de chauffage** complet : clims (pompe à chaleur) + chaudière gaz pilotée par Tado, en fonction du tarif **EDF Tempo**, de la **présence** et du **surplus solaire**. Ainsi que la gestion énergie associée : batterie, chauffe-eau, EMHASS. L'histoire du projet est racontée dans le [journal](docs/journal.md).
 
 > Projet personnel, testé sur 2 monosplits et un groupe extérieur bi-split alimentant 4 unités intérieures. Aucune affiliation avec Airton. Ouvrir une clim et y brancher un montage maison se fait à vos risques.
 
@@ -28,12 +28,17 @@ esphome/
   secrets.example.yaml
 homeassistant/
   packages/clims_orchestrateur.yaml   helpers, capteurs, automatisations, script
+  packages/energie_tempo.yaml         Tempo, batterie, chauffe-eau, EMHASS, alertes
   dashboard/thermostats.yaml          vue "Thermostats" (Mushroom)
+  recorder_exemple.yaml               enregistreur allégé
 docs/
+  journal.md                    l'histoire du projet, étape par étape
   protocole-tuya-monosplit.md   datapoints, trames capturées, bugs de la carte
   protocole-7a7a-bisplit.md     format des trames, octets décodés, compteur d'énergie
   orchestrateur.md              logique Tempo / gaz / présence / été
+  energie.md                    Tempo, batterie, chauffe-eau, EMHASS
   materiel.md                   matériel, câblage, flashage
+  depannage.md                  FAQ, capture de trames, base de données corrompue
 ```
 
 ## Démarrage rapide
