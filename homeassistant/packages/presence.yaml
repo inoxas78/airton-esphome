@@ -1,0 +1,98 @@
+# =============================================================================
+#  PRESENCE : fusion geolocalisation Tado + telephones, forcage manuel
+#  Fournit binary_sensor.presence_maison, utilise par le superviseur.
+#  Package Home Assistant : dans configuration.yaml
+#    homeassistant:
+#      packages: !include_dir_named packages
+#  Les trois fichiers chauffage_superviseur.yaml, presence.yaml et clims_conso.yaml
+#  vont ensemble. Liste des dependances : docs/dependances.md
+# =============================================================================
+
+input_boolean:
+  presence_calculee:
+    name: Présence calculée
+    icon: mdi:home-account
+
+
+input_select:
+  mode_presence:
+    name: Mode présence
+    options:
+      - Auto (géolocalisation)
+      - "Forcé : présents"
+      - "Forcé : absents"
+    initial: Auto (géolocalisation)
+    icon: mdi:map-marker-account
+
+
+template:
+  - binary_sensor:
+      - name: Présence téléphones
+        unique_id: presence_telephones
+        device_class: presence
+        state: "{{ is_state('person.personne_1','home') or is_state('person.personne_2','home') }}"
+
+      # Auto = presence calculee (fusion Tado + telephones), sinon forcage manuel
+      - name: Présence maison
+        unique_id: presence_maison
+        device_class: presence
+        state: >-
+          {% set m = states('input_select.mode_presence') %}
+          {% if m.startswith('Forcé : présents') %}true
+          {% elif m.startswith('Forcé : absents') %}false
+          {% else %}{{ is_state('input_boolean.presence_calculee','on') }}{% endif %}
+
+automation:
+  - id: presence_mode_tado
+    alias: "Présence : appliquer le mode (géolocalisation / forçage) à Tado"
+    triggers:
+      - trigger: state
+        entity_id: input_select.mode_presence
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          p: >-
+            {% set m = states('input_select.mode_presence') %}
+            {{ 'home' if m.startswith('Forcé : présents') else ('away' if m.startswith('Forcé : absents') else 'auto') }}
+      - if:
+          - condition: template
+            value_template: "{{ state_attr('climate.salon','preset_mode') != p }}"
+        then:
+          - action: climate.set_preset_mode
+            target:
+              entity_id: climate.salon      # n'importe quelle piece Tado : le preset est global
+            data:
+              preset_mode: "{{ p }}"
+    mode: restart
+
+  # Tado detecte parfois les arrivees avec du retard : on fusionne avec les telephones,
+  # le dernier changement (presence comme absence) l'emporte.
+  - id: presence_fusion_tado_telephones
+    alias: "Présence : fusion Tado + téléphones (le dernier changement l'emporte)"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.presence_telephones
+        from: ["on", "off"]
+        to: ["on", "off"]
+        id: tel
+      - trigger: state
+        entity_id: sensor.maison_mode_tado
+        to: ["HOME", "AWAY"]
+        id: tado
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
+    actions:
+      - variables:
+          present: "{{ trigger.to_state.state in ['on','HOME'] }}"
+      - action: "{{ 'input_boolean.turn_on' if present else 'input_boolean.turn_off' }}"
+        target:
+          entity_id: input_boolean.presence_calculee
+      - action: logbook.log
+        data:
+          name: Présence
+          message: >-
+            {{ ('présents' if present else 'absents') ~ ' (détecté par ' ~ ('les téléphones' if trigger.id == 'tel' else 'Tado') ~ ')' }}
+          entity_id: binary_sensor.presence_maison
+    mode: queued

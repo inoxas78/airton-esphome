@@ -1,19 +1,15 @@
 # =============================================================================
-#  Orchestrateur chauffage / climatisation : clims Airton + chaudiere gaz (Tado)
-#  + EDF Tempo + presence + surplus solaire.
-#
+#  SUPERVISEUR CHAUFFAGE / CLIMATISATION (clims Airton + chaudiere gaz Tado + EDF Tempo)
+#  Contient le superviseur et TOUT ce dont il depend, sauf la presence (presence.yaml) :
+#    - interrupteur general, saison, consignes, horaires
+#    - capteurs de decision : source active, consigne cible, consigne chambres
+#    - derogation manuelle (minuteurs + automatisation) et script "Tout en auto"
+#    - detection du surplus solaire (bonus ete)
 #  Package Home Assistant : dans configuration.yaml
 #    homeassistant:
 #      packages: !include_dir_named packages
-#
-#  Entites externes attendues (a adapter) :
-#    - sensor.rte_tempo_couleur_actuelle / sensor.rte_tempo_prochaine_couleur
-#      binary_sensor.rte_tempo_heures_creuses   (integration "RTE Tempo")
-#    - climate.<piece> Tado (une par piece) + sensor.maison_mode_tado (HOME/AWAY)
-#    - person.personne_1 / person.personne_2 (application compagnon)
-#    - sensor.reseau_puissance : puissance au compteur, NEGATIVE en injection
-#    - climate.clim_* : les clims ESPHome (voir dossier esphome/)
-#  Documentation : docs/orchestrateur.md
+#  Les trois fichiers chauffage_superviseur.yaml, presence.yaml et clims_conso.yaml
+#  vont ensemble. Liste des dependances : docs/dependances.md
 # =============================================================================
 
 # ----------------------------------------------------------------- Reglages --
@@ -24,9 +20,6 @@ input_boolean:
   surplus_solaire:
     name: Surplus solaire
     icon: mdi:solar-power-variant
-  presence_calculee:
-    name: Présence calculée
-    icon: mdi:home-account
 
 input_select:
   saison_clim:
@@ -37,14 +30,6 @@ input_select:
       - Arrêt (mi-saison)
     initial: Hiver (chauffage)
     icon: mdi:sun-snowflake-variant
-  mode_presence:
-    name: Mode présence
-    options:
-      - Auto (géolocalisation)
-      - "Forcé : présents"
-      - "Forcé : absents"
-    initial: Auto (géolocalisation)
-    icon: mdi:map-marker-account
 
 input_number:
   chauffage_consigne_jour:
@@ -165,24 +150,8 @@ timer:
     <<: *derog
     name: Dérogation clim chambre parents
 
-# ---------------------------------------------------------------- Capteurs ---
+# ----------------------------------------------------- Capteurs de decision ---
 template:
-  - binary_sensor:
-      - name: Présence téléphones
-        unique_id: presence_telephones
-        device_class: presence
-        state: "{{ is_state('person.personne_1','home') or is_state('person.personne_2','home') }}"
-
-      # Auto = presence calculee (fusion Tado + telephones), sinon forcage manuel
-      - name: Présence maison
-        unique_id: presence_maison
-        device_class: presence
-        state: >-
-          {% set m = states('input_select.mode_presence') %}
-          {% if m.startswith('Forcé : présents') %}true
-          {% elif m.startswith('Forcé : absents') %}false
-          {% else %}{{ is_state('input_boolean.presence_calculee','on') }}{% endif %}
-
   - sensor:
       # Qui chauffe : clims (pompe a chaleur) sauf jours ROUGES en heures pleines -> gaz
       - name: Chauffage source active
@@ -413,60 +382,6 @@ automation:
     mode: single
 
   # Geolocalisation Tado activable / forcable depuis Home Assistant
-  - id: presence_mode_tado
-    alias: "Présence : appliquer le mode (géolocalisation / forçage) à Tado"
-    triggers:
-      - trigger: state
-        entity_id: input_select.mode_presence
-      - trigger: homeassistant
-        event: start
-    actions:
-      - variables:
-          p: >-
-            {% set m = states('input_select.mode_presence') %}
-            {{ 'home' if m.startswith('Forcé : présents') else ('away' if m.startswith('Forcé : absents') else 'auto') }}
-      - if:
-          - condition: template
-            value_template: "{{ state_attr('climate.salon','preset_mode') != p }}"
-        then:
-          - action: climate.set_preset_mode
-            target:
-              entity_id: climate.salon      # n'importe quelle piece Tado : le preset est global
-            data:
-              preset_mode: "{{ p }}"
-    mode: restart
-
-  # Tado detecte parfois les arrivees avec du retard : on fusionne avec les telephones,
-  # le dernier changement (presence comme absence) l'emporte.
-  - id: presence_fusion_tado_telephones
-    alias: "Présence : fusion Tado + téléphones (le dernier changement l'emporte)"
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.presence_telephones
-        from: ["on", "off"]
-        to: ["on", "off"]
-        id: tel
-      - trigger: state
-        entity_id: sensor.maison_mode_tado
-        to: ["HOME", "AWAY"]
-        id: tado
-    conditions:
-      - condition: template
-        value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
-    actions:
-      - variables:
-          present: "{{ trigger.to_state.state in ['on','HOME'] }}"
-      - action: "{{ 'input_boolean.turn_on' if present else 'input_boolean.turn_off' }}"
-        target:
-          entity_id: input_boolean.presence_calculee
-      - action: logbook.log
-        data:
-          name: Présence
-          message: >-
-            {{ ('présents' if present else 'absents') ~ ' (détecté par ' ~ ('les téléphones' if trigger.id == 'tel' else 'Tado') ~ ')' }}
-          entity_id: binary_sensor.presence_maison
-    mode: queued
-
 # ------------------------------------------------------------------ Scripts ---
 script:
   reprendre_pilotage_clims:
@@ -494,22 +409,3 @@ script:
           skip_condition: false
 
 # Consommation du jour par clim (badges du tableau de bord)
-utility_meter:
-  clim_salon_conso_jour:
-    source: sensor.clim_salon_energie_estimee
-    cycle: daily
-  clim_bureau_conso_jour:
-    source: sensor.clim_bureau_energie_estimee
-    cycle: daily
-  clim_chambre_1_conso_jour:
-    source: sensor.clim_bisplit_1_energie_consommee
-    cycle: daily
-  clim_chambre_2_conso_jour:
-    source: sensor.clim_bisplit_2_energie_consommee
-    cycle: daily
-  clim_chambre_3_conso_jour:
-    source: sensor.clim_bisplit_3_energie_consommee
-    cycle: daily
-  clim_chambre_parents_conso_jour:
-    source: sensor.clim_bisplit_4_energie_consommee
-    cycle: daily

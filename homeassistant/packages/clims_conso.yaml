@@ -1,0 +1,28 @@
+# =============================================================================
+#  CONSOMMATION DU JOUR PAR CLIM (badges du tableau de bord)
+#  Package Home Assistant : dans configuration.yaml
+#    homeassistant:
+#      packages: !include_dir_named packages
+#  Les trois fichiers chauffage_superviseur.yaml, presence.yaml et clims_conso.yaml
+#  vont ensemble. Liste des dependances : docs/dependances.md
+# =============================================================================
+
+utility_meter:
+  clim_salon_conso_jour:
+    source: sensor.clim_salon_energie_estimee
+    cycle: daily
+  clim_bureau_conso_jour:
+    source: sensor.clim_bureau_energie_estimee
+    cycle: daily
+  clim_chambre_1_conso_jour:
+    source: sensor.clim_bisplit_1_energie_consommee
+    cycle: daily
+  clim_chambre_2_conso_jour:
+    source: sensor.clim_bisplit_2_energie_consommee
+    cycle: daily
+  clim_chambre_3_conso_jour:
+    source: sensor.clim_bisplit_3_energie_consommee
+    cycle: daily
+  clim_chambre_parents_conso_jour:
+    source: sensor.clim_bisplit_4_energie_consommee
+    cycle: daily

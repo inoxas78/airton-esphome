@@ -1,6 +1,6 @@
 # =============================================================================
 #  Energie : EDF Tempo + batterie domestique (Huawei) + chauffe-eau + EMHASS
-#  Package Home Assistant, complementaire de clims_orchestrateur.yaml.
+#  Package Home Assistant, complementaire de chauffage_superviseur.yaml.
 #  Documentation : docs/energie.md
 #
 #  Entites externes attendues (a adapter) :

@@ -1,6 +1,6 @@
 # Orchestrateur chauffage / climatisation
 
-Fichier : [`homeassistant/packages/clims_orchestrateur.yaml`](../homeassistant/packages/clims_orchestrateur.yaml)
+Fichiers : [`chauffage_superviseur.yaml`](../homeassistant/packages/chauffage_superviseur.yaml) (le superviseur et ses dépendances), [`presence.yaml`](../homeassistant/packages/presence.yaml), [`clims_conso.yaml`](../homeassistant/packages/clims_conso.yaml). Liste complète des dépendances : [dependances.md](dependances.md).
 
 Objectif : chauffer avec les clims (pompes à chaleur, nettement moins chères que le gaz la plupart du temps) et basculer sur la chaudière gaz pilotée par **Tado** uniquement quand l'électricité est hors de prix, c'est-à-dire en **heures pleines des jours rouges Tempo**. Le tout en tenant compte de la présence, des horaires et du soleil.
 
