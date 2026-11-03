@@ -37,7 +37,7 @@ Pour reprendre la main avant la fin : toucher la carte « Réglage manuel » de 
 
 - `binary_sensor.presence_telephones` : quelqu'un est à la maison d'après l'application compagnon.
 - `sensor.maison_mode_tado` : géolocalisation Tado (HOME / AWAY). Tado réagit parfois avec plusieurs minutes de retard.
-- `presence_fusion_tado_telephones` : **le dernier changement l'emporte**. Le premier des deux systèmes qui détecte une arrivée (ou un départ) met à jour `input_boolean.presence_calculee`.
+- `presence_fusion_tado_telephones` : à l'**arrivée**, le premier des deux systèmes qui détecte quelqu'un l'emporte ; au **départ**, la maison ne passe absente que quand les téléphones des deux personnes sont partis. Un passage de Tado en AWAY est ignoré tant qu'un téléphone est à la maison.
 - `input_select.mode_presence` : Auto (géolocalisation), Forcé présents ou Forcé absents. Le forçage est aussi envoyé à Tado (préréglage home / away / auto).
 
 ## Surplus solaire

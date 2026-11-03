@@ -84,15 +84,31 @@ automation:
       - condition: template
         value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
     actions:
+      # Depart : absent seulement quand les deux telephones sont partis.
+      # Un passage de Tado en AWAY est ignore tant qu'un telephone est a la maison
+      # (Tado ne suit pas forcement tous les telephones).
       - variables:
           present: "{{ trigger.to_state.state in ['on','HOME'] }}"
-      - action: "{{ 'input_boolean.turn_on' if present else 'input_boolean.turn_off' }}"
-        target:
-          entity_id: input_boolean.presence_calculee
-      - action: logbook.log
-        data:
-          name: Présence
-          message: >-
-            {{ ('présents' if present else 'absents') ~ ' (détecté par ' ~ ('les téléphones' if trigger.id == 'tel' else 'Tado') ~ ')' }}
-          entity_id: binary_sensor.presence_maison
+          ignore: >-
+            {{ trigger.id == 'tado' and trigger.to_state.state == 'AWAY'
+               and is_state('binary_sensor.presence_telephones','on') }}
+      - if:
+          - condition: template
+            value_template: "{{ ignore }}"
+        then:
+          - action: logbook.log
+            data:
+              name: Présence
+              message: "Tado indique absent mais un téléphone est à la maison : ignoré"
+              entity_id: binary_sensor.presence_maison
+        else:
+          - action: "{{ 'input_boolean.turn_on' if present else 'input_boolean.turn_off' }}"
+            target:
+              entity_id: input_boolean.presence_calculee
+          - action: logbook.log
+            data:
+              name: Présence
+              message: >-
+                {{ ('présents' if present else 'absents') ~ ' (détecté par ' ~ ('les téléphones' if trigger.id == 'tel' else 'Tado') ~ ')' }}
+              entity_id: binary_sensor.presence_maison
     mode: queued
