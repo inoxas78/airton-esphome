@@ -19,7 +19,7 @@ L'automatisation `chauffage_superviseur_tempo` parcourt une liste de pièces. Ch
 | Source | Clims | Tado |
 |---|---|---|
 | Clim chauffage | chauffage à la consigne (arrondie au degré supérieur ; chambres : consigne chambres) | arrêté |
-| Gaz (Tado) | éteintes | **auto** : Tado gère seul, avec son anticipation et sa géolocalisation |
+| Gaz (Tado) | veille : chauffage à 16 °C (minimum), pas d'arrêt | **auto** : Tado gère seul, avec son anticipation et sa géolocalisation |
 | Clim été | monosplits en **Auto**, bi-splits en **Froid** | arrêté |
 | Arrêt | éteintes | auto |
 

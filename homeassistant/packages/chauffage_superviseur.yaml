@@ -217,7 +217,7 @@ automation:
   - id: chauffage_superviseur_tempo
     alias: "Chauffage : superviseur clim / gaz (Tempo)"
     description: >-
-      Hiver : clims en chauffage, sauf jours rouges 6h-22h (clims arretees, Tado auto au gaz) ;
+      Hiver : clims en chauffage, sauf jours rouges 6h-22h (clims en veille a 16 °C, Tado auto au gaz) ;
       Tado arrete quand les clims chauffent. Ete : Tado arrete, clims en climatisation
       (monosplits en Auto, bi-splits en Froid pour eviter les conflits de mode sur le groupe
       exterieur partage). Arret : clims eteintes, Tado en auto. Pieces en derogation ignorees.
@@ -260,13 +260,42 @@ automation:
           sequence:
             - if:
                 - condition: template
-                  value_template: "{{ not is_state(repeat.item.timer, 'active') }}"
+                  value_template: >-
+                    {{ not is_state(repeat.item.timer, 'active')
+                       and states(repeat.item.clim) not in ['unavailable','unknown'] }}
               then:
                 - choose:
-                    # Gaz ou arret : clims coupees, Tado reprend la main (mode auto)
+                    # Gaz (jour rouge 6 h - 22 h) : clims en VEILLE a leur minimum (16 °C) plutot
+                    # qu'eteintes (certaines unites coupent l'alimentation du module a l'arret),
+                    # Tado reprend la main (mode auto)
                     - conditions:
                         - condition: template
-                          value_template: "{{ source == 'Gaz (Tado)' or source == 'Arrêt' }}"
+                          value_template: "{{ source == 'Gaz (Tado)' }}"
+                      sequence:
+                        - variables:
+                            tmin: "{{ state_attr(repeat.item.clim, 'min_temp') | float(16) }}"
+                        - if:
+                            - condition: template
+                              value_template: >-
+                                {{ not is_state(repeat.item.clim, 'heat')
+                                   or state_attr(repeat.item.clim, 'temperature') | float(0) != tmin | float }}
+                          then:
+                            - action: climate.set_temperature
+                              target: { entity_id: "{{ repeat.item.clim }}" }
+                              data: { hvac_mode: heat, temperature: "{{ tmin }}" }
+                              continue_on_error: true
+                            - delay: { seconds: 2 }
+                        - if:
+                            - condition: template
+                              value_template: "{{ not is_state(repeat.item.tado, 'auto') }}"
+                          then:
+                            - action: climate.set_hvac_mode
+                              target: { entity_id: "{{ repeat.item.tado }}" }
+                              data: { hvac_mode: auto }
+                    # Arret (mi-saison) : clims coupees, Tado en auto
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ source == 'Arrêt' }}"
                       sequence:
                         - if:
                             - condition: template
@@ -295,7 +324,11 @@ automation:
                               target: { entity_id: "{{ repeat.item.tado }}" }
                               data: { hvac_mode: "off" }
                         - variables:
-                            t: "{{ ((cible_ch if (repeat.item.type == 'bi' and cible_ch > 0) else cible)) | round(0, 'ceil') }}"
+                            t: >-
+                              {% set t0 = ((cible_ch if (repeat.item.type == 'bi' and cible_ch > 0) else cible) | round(0, 'ceil')) | float %}
+                              {% set lo = state_attr(repeat.item.clim, 'min_temp') | float(16) %}
+                              {% set hi = state_attr(repeat.item.clim, 'max_temp') | float(31) %}
+                              {{ [[t0, lo] | max, hi] | min }}
                         - if:
                             - condition: template
                               value_template: >-
@@ -305,6 +338,7 @@ automation:
                             - action: climate.set_temperature
                               target: { entity_id: "{{ repeat.item.clim }}" }
                               data: { hvac_mode: heat, temperature: "{{ t }}" }
+                              continue_on_error: true
                             - delay: { seconds: 2 }
                     # Ete : Tado coupe, monosplits en Auto, bi-splits en Froid
                     - conditions:
@@ -319,7 +353,10 @@ automation:
                               target: { entity_id: "{{ repeat.item.tado }}" }
                               data: { hvac_mode: "off" }
                         - variables:
-                            t: "{{ cible | round(0) }}"
+                            t: >-
+                              {% set lo = state_attr(repeat.item.clim, 'min_temp') | float(16) %}
+                              {% set hi = state_attr(repeat.item.clim, 'max_temp') | float(31) %}
+                              {{ [[cible | round(0), lo] | max, hi] | min }}
                             m: "{{ 'auto' if repeat.item.type == 'mono' else 'cool' }}"
                         - if:
                             - condition: template
@@ -330,6 +367,7 @@ automation:
                             - action: climate.set_temperature
                               target: { entity_id: "{{ repeat.item.clim }}" }
                               data: { hvac_mode: "{{ m }}", temperature: "{{ t }}" }
+                              continue_on_error: true
                             - delay: { seconds: 2 }
     mode: queued
     max: 3

@@ -25,7 +25,7 @@ C'est le cerveau de l'installation : l'automatisation **`chauffage_superviseur_t
 | Situation (`sensor.chauffage_source_active`) | Clims | Chaudière gaz (Tado) |
 |---|---|---|
 | **Hiver**, sauf heures pleines d'un jour rouge → « Clim chauffage » | chauffage à la consigne cible (chambres : consigne chambres) | **arrêtée** |
-| **Hiver, jour rouge de 6 h à 22 h** → « Gaz (Tado) » | **éteintes** | **auto** : Tado gère seul, avec son anticipation et sa géolocalisation |
+| **Hiver, jour rouge de 6 h à 22 h** → « Gaz (Tado) » | **en veille** : chauffage à 16 °C, leur minimum, sans les éteindre (certaines unités coupent l'alimentation du module à l'arrêt) | **auto** : Tado gère seul, avec son anticipation et sa géolocalisation |
 | **Été** → « Clim été » | monosplits en **Auto**, bi-splits en **Froid** | arrêtée |
 | **Arrêt** (mi-saison) | éteintes | auto |
 
