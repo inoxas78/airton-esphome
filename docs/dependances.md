@@ -30,6 +30,7 @@ Pour le tableau de bord seulement : Mushroom, mini-graph-card et card-mod (HACS)
 | `automation` dérogation | chauffage_superviseur.yaml | démarre la dérogation quand un utilisateur règle une clim |
 | `input_boolean.surplus_solaire` + `automation` | chauffage_superviseur.yaml | −1 °C l'été en cas de surplus |
 | `script.reprendre_pilotage_clims` | chauffage_superviseur.yaml | « Tout en auto » |
+| `input_select.mode_vacances`, `binary_sensor.vacances_scolaires_en_cours`, `binary_sensor.mode_vacances_actif`, capteur REST du calendrier scolaire | chauffage_superviseur.yaml | vacances : présence forcée, chambres au réglage week-end |
 | `binary_sensor.presence_maison` | presence.yaml | présent ou absent (consignes jour / nuit / absence) |
 | `binary_sensor.presence_telephones`, `input_boolean.presence_calculee`, `input_select.mode_presence` | presence.yaml | fusion Tado + téléphones, forçage |
 | `sensor.clim_*_conso_jour` | clims_conso.yaml | consommation du jour (tableau de bord uniquement) |

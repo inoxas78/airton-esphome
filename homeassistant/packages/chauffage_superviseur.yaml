@@ -31,6 +31,15 @@ input_select:
     initial: Hiver (chauffage)
     icon: mdi:sun-snowflake-variant
 
+  mode_vacances:
+    name: Mode vacances
+    options:
+      - Auto (calendrier scolaire)
+      - "Forcé : vacances"
+      - "Forcé : pas de vacances"
+    initial: Auto (calendrier scolaire)
+    icon: mdi:beach
+
 input_number:
   chauffage_consigne_jour:
     name: Chauffage consigne jour
@@ -64,6 +73,14 @@ input_number:
     mode: box
     unit_of_measurement: "°C"
     icon: mdi:bed
+  chauffage_consigne_chambres_semaine:
+    name: Chauffage consigne chambres semaine
+    min: 15
+    max: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:school
   chauffage_prechauffage_veille_rouge:
     name: Chauffage préchauffage veille rouge
     min: 0
@@ -150,8 +167,41 @@ timer:
     <<: *derog
     name: Dérogation clim chambre parents
 
+# ------------------------------------------------ Vacances scolaires (officiel) ---
+# Calendrier de l'Education nationale. Adapter "location" a votre academie
+# (ici Orleans-Tours, zone B).
+rest:
+  - resource: "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-calendrier-scolaire/records?where=location%3D%22Orl%C3%A9ans-Tours%22%20and%20end_date%3E%3Dnow()%20and%20population%21%3D%22Enseignants%22&order_by=start_date&limit=10&select=description,start_date,end_date"
+    scan_interval: 21600
+    sensor:
+      - name: Vacances scolaires calendrier
+        unique_id: vacances_scolaires_calendrier
+        icon: mdi:calendar-star
+        value_template: "{{ value_json.results[0].description if value_json.results else 'Aucune' }}"
+        json_attributes:
+          - results
+
 # ----------------------------------------------------- Capteurs de decision ---
 template:
+  - binary_sensor:
+      # start_date = premier jour de vacances 00:00, end_date = jour de la rentree 00:00
+      - name: Vacances scolaires en cours
+        unique_id: vacances_scolaires_en_cours
+        state: >-
+          {% set n = now() %}{% set ns = namespace(on=false) %}
+          {% for v in state_attr('sensor.vacances_scolaires_calendrier','results') or [] %}
+            {% set s = as_datetime(v.start_date) | as_local %}{% set e = as_datetime(v.end_date) | as_local %}
+            {% if e <= s %}{% set e = s + timedelta(days=1) %}{% endif %}
+            {% if s <= n < e %}{% set ns.on = true %}{% endif %}
+          {% endfor %}{{ ns.on }}
+      # Vacances : temperatures de presence partout, meme en absence
+      - name: Mode vacances actif
+        unique_id: mode_vacances_actif
+        state: >-
+          {% set m = states('input_select.mode_vacances') %}
+          {% if m.startswith('Forcé : vacances') %}true
+          {% elif m.startswith('Forcé : pas') %}false
+          {% else %}{{ is_state('binary_sensor.vacances_scolaires_en_cours','on') }}{% endif %}
   - sensor:
       # Qui chauffe : clims (pompe a chaleur) sauf jours ROUGES en heures pleines -> gaz
       - name: Chauffage source active
@@ -176,7 +226,7 @@ template:
         state: >-
           {% set n = now() %}
           {% set ete = states('input_select.saison_clim').startswith('Été') %}
-          {% set present = is_state('binary_sensor.presence_maison','on') %}
+          {% set present = is_state('binary_sensor.presence_maison','on') or is_state('binary_sensor.mode_vacances_actif','on') %}
           {% set we = n.weekday() >= 5 %}
           {% set rev = states('input_datetime.chauffage_reveil_week_end') if we else states('input_datetime.chauffage_reveil_semaine') %}
           {% set debut_jour = today_at(rev) - timedelta(minutes=0 if ete else states('input_number.chauffage_anticipation_reveil')|int(60)) %}
@@ -198,6 +248,9 @@ template:
           {{ (base + bonus) | round(1) }}
 
       # Chambres : consigne specifique en journee (ex. 19 °C de 9 h a 17 h) quand on est la
+      # Chambres en journee quand la maison est occupee :
+      #   semaine (hors vacances) -> consigne "semaine" (ex. 16 °C, enfants a l'ecole)
+      #   week-end ou vacances    -> consigne "journee" (ex. 19 °C)
       - name: Chauffage consigne chambres
         unique_id: chauffage_consigne_chambres
         unit_of_measurement: "°C"
@@ -206,11 +259,16 @@ template:
         state: >-
           {% set c = states('sensor.chauffage_consigne_cible') | float(0) %}
           {% set ete = states('input_select.saison_clim').startswith('Été') %}
-          {% set present = is_state('binary_sensor.presence_maison','on') %}
+          {% set vac = is_state('binary_sensor.mode_vacances_actif','on') %}
+          {% set present = is_state('binary_sensor.presence_maison','on') or vac %}
           {% set n = now() %}
           {% set journee = today_at(states('input_datetime.chauffage_chambres_debut_journee')) <= n
                            < today_at(states('input_datetime.chauffage_chambres_fin_journee')) %}
-          {{ (states('input_number.chauffage_consigne_chambres_journee') | float(19)) if (not ete and present and journee) else c }}
+          {% set semaine = n.weekday() < 5 and not vac %}
+          {% if not ete and present and journee %}
+            {{ (states('input_number.chauffage_consigne_chambres_semaine') | float(16)) if semaine
+               else (states('input_number.chauffage_consigne_chambres_journee') | float(19)) }}
+          {% else %}{{ c }}{% endif %}
 
 # ----------------------------------------------------------- Automatisations --
 automation:

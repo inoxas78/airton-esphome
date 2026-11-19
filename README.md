@@ -34,7 +34,8 @@ La consigne (`sensor.chauffage_consigne_cible`) suit ces règles :
 - **jour**, **nuit** ou **absence** selon la présence, toutes réglables (ici 22, 18 et 16 °C) ;
 - le confort démarre **avant le réveil** : 7 h en semaine, 8 h le week-end, avec une anticipation réglable ;
 - **+1,5 °C de 4 h à 6 h** (heures creuses) la veille d'un jour rouge, pour stocker de la chaleur ;
-- les **chambres** ont une consigne propre en journée (19 °C de 9 h à 17 h quand on est là) ;
+- les **chambres** ont une consigne propre en journée, de 9 h à 17 h quand on est là : **16 °C en semaine** (enfants à l'école) et **19 °C le week-end et pendant les vacances**, toutes deux réglables ;
+- **vacances scolaires** : le calendrier officiel de l'Éducation nationale est lu automatiquement (mode Auto), ou forcé en marche ou à l'arrêt. Pendant les vacances, les températures de présence s'appliquent dans toute la maison, même si personne n'est là ;
 - **l'été**, consignes été (26, 25 ou 28 °C selon jour, nuit ou absence), **−1 °C en cas de surplus solaire**.
 
 Ce qu'il respecte :
