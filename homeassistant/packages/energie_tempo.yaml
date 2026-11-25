@@ -157,7 +157,9 @@ automation:
     max: 3
 
   # Batterie : la veille d'un jour rouge, charge a 100 % en heures creuses (22 h - 6 h) ;
-  # en journee rouge (ou blanc avant rouge), sauvetage si la batterie passe sous 6,5 % ;
+  # en journee rouge, sauvetage seulement si la batterie passe sous 3 %, donc sous le seuil
+  # de fin de decharge Huawei (5 %) : situation anormale. Un seuil a 6,5 % faisait boucler
+  # la batterie toute la journee (charge reseau a 13 %, decharge a 5 %, et on recommence) ;
   # a 6 h, retour en autoconsommation.
   - id: batterie_charge_tempo
     alias: "Batterie : charge Tempo rouge + heures creuses"
@@ -166,7 +168,7 @@ automation:
       - { trigger: time, at: "06:00:00", id: charge_nuit_stop }
       - { trigger: time_pattern, minutes: "0", id: maintenance_nuit }
       - { trigger: time_pattern, minutes: "30", id: maintenance_nuit }
-      - { trigger: numeric_state, entity_id: sensor.batteries_etat_de_la_capacite, below: 6.5, id: securite_basse }
+      - { trigger: numeric_state, entity_id: sensor.batteries_etat_de_la_capacite, below: 3, id: securite_basse }
       - { trigger: homeassistant, event: start, id: check_demarrage }
     actions:
       - choose:
@@ -193,20 +195,17 @@ automation:
                 before: "22:00:00"
               - condition: numeric_state
                 entity_id: sensor.batteries_etat_de_la_capacite
-                below: 6.5
-              - condition: state
-                entity_id: sensor.rte_tempo_prochaine_couleur
-                state: Rouge
+                below: 3
               - condition: state
                 entity_id: sensor.rte_tempo_couleur_actuelle
-                state: [Rouge, Blanc]
+                state: Rouge
             sequence:
               - action: switch.turn_on
                 target: { entity_id: switch.batteries_charge_depuis_le_reseau }
               - action: huawei_solar.forcible_charge_soc
                 data: { device_id: VOTRE_DEVICE_ID_BATTERIE, target_soc: 13, power: 500 }
               - action: logbook.log
-                data: { name: Batterie, message: "Sauvetage niveau bas (<6,5 %) activé (jour critique)." }
+                data: { name: Batterie, message: "Sauvetage : SOC < 3 % (sous le seuil de fin de décharge), recharge à 13 %." }
           - conditions:
               - condition: or
                 conditions:

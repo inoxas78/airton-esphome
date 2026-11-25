@@ -28,7 +28,7 @@ Les heures pleines d'un jour rouge coûtent environ 4,4 fois plus que les heures
 ## Batterie
 
 - **Veille d'un jour rouge** : charge forcée à 100 % pendant les heures creuses.
-- **Journée rouge** : si la batterie descend sous 6,5 %, petite recharge de sauvetage jusqu'à 13 %.
+- **Journée rouge** : si la batterie descend sous 3 %, petite recharge de sauvetage jusqu'à 13 %. Le seuil doit rester **sous le SOC de fin de décharge** de l'onduleur (5 % ici). À 6,5 %, la batterie bouclait toute la journée : recharge sur le réseau jusqu'à 13 %, décharge jusqu'à 5 %, puis nouvelle recharge, en payant le kWh au prix plein.
 - **6 h** : retour en mode autoconsommation.
 
 ## Chauffe-eau
