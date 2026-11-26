@@ -279,6 +279,8 @@ automation:
       Tado arrete quand les clims chauffent. Ete : Tado arrete, clims en climatisation
       (monosplits en Auto, bi-splits en Froid pour eviter les conflits de mode sur le groupe
       exterieur partage). Arret : clims eteintes, Tado en auto. Pieces en derogation ignorees.
+      Un Tado en mode "heat" (boost ou reglage manuel depuis l'appli Tado) n'est jamais modifie :
+      Tado reprend son planning tout seul a la fin du boost.
     triggers:
       - trigger: state
         entity_id:
@@ -292,6 +294,17 @@ automation:
         event_type: timer.finished
       - trigger: homeassistant
         event: start
+      # une clim qui revient apres une coupure (redemarrage du module) est remise a son etat
+      - trigger: state
+        entity_id:
+          - climate.clim_salon
+          - climate.clim_bureau
+          - climate.clim_chambre_1
+          - climate.clim_chambre_2
+          - climate.clim_chambre_3
+          - climate.clim_chambre_parents
+        from: unavailable
+        for: { seconds: 30 }
     conditions:
       - condition: state
         entity_id: input_boolean.superviseur_chauffage
@@ -345,7 +358,7 @@ automation:
                             - delay: { seconds: 2 }
                         - if:
                             - condition: template
-                              value_template: "{{ not is_state(repeat.item.tado, 'auto') }}"
+                              value_template: "{{ states(repeat.item.tado) not in ['auto', 'heat'] }}"
                           then:
                             - action: climate.set_hvac_mode
                               target: { entity_id: "{{ repeat.item.tado }}" }
@@ -364,7 +377,7 @@ automation:
                               data: { hvac_mode: "off" }
                         - if:
                             - condition: template
-                              value_template: "{{ not is_state(repeat.item.tado, 'auto') }}"
+                              value_template: "{{ states(repeat.item.tado) not in ['auto', 'heat'] }}"
                           then:
                             - action: climate.set_hvac_mode
                               target: { entity_id: "{{ repeat.item.tado }}" }
@@ -376,7 +389,7 @@ automation:
                       sequence:
                         - if:
                             - condition: template
-                              value_template: "{{ not is_state(repeat.item.tado, 'off') }}"
+                              value_template: "{{ states(repeat.item.tado) not in ['off', 'heat'] }}"
                           then:
                             - action: climate.set_hvac_mode
                               target: { entity_id: "{{ repeat.item.tado }}" }
@@ -405,7 +418,7 @@ automation:
                       sequence:
                         - if:
                             - condition: template
-                              value_template: "{{ not is_state(repeat.item.tado, 'off') }}"
+                              value_template: "{{ states(repeat.item.tado) not in ['off', 'heat'] }}"
                           then:
                             - action: climate.set_hvac_mode
                               target: { entity_id: "{{ repeat.item.tado }}" }

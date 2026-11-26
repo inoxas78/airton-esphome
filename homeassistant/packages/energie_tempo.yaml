@@ -180,6 +180,8 @@ automation:
                 entity_id: sensor.rte_tempo_prochaine_couleur
                 state: Rouge
             sequence:
+              - variables:
+                  deja_en_charge: "{{ is_state('input_boolean.statut_charge_forcee', 'on') }}"
               - action: select.select_option
                 target: { entity_id: select.batteries_mode_de_fonctionnement }
                 data: { option: fixed_charge_discharge }
@@ -189,6 +191,16 @@ automation:
                 data: { device_id: VOTRE_DEVICE_ID_BATTERIE, target_soc: 100, power: 3000 }
               - action: input_boolean.turn_on
                 target: { entity_id: input_boolean.statut_charge_forcee }
+              # notification une seule fois (la branche est rejouee toutes les 30 min)
+              - if: "{{ not deja_en_charge }}"
+                then:
+                  - action: script.cerveau_notifier
+                    data:
+                      categorie: batterie
+                      titre: "Batterie : charge de nuit lancée"
+                      message: >-
+                        Demain est un jour ROUGE : charge à 100 % depuis le réseau à 3 kW en heures
+                        creuses, jusqu'à 6 h. Batterie à {{ states('sensor.batteries_etat_de_la_capacite') | float(0) | round(0) }} %.
           - conditions:
               - condition: time
                 after: "06:00:00"
@@ -204,8 +216,12 @@ automation:
                 target: { entity_id: switch.batteries_charge_depuis_le_reseau }
               - action: huawei_solar.forcible_charge_soc
                 data: { device_id: VOTRE_DEVICE_ID_BATTERIE, target_soc: 13, power: 500 }
-              - action: logbook.log
-                data: { name: Batterie, message: "Sauvetage : SOC < 3 % (sous le seuil de fin de décharge), recharge à 13 %." }
+              - action: script.cerveau_notifier
+                data:
+                  categorie: batterie
+                  titre: "Batterie : recharge de sauvetage"
+                  message: "Jour rouge et batterie sous 3 % : recharge à 500 W jusqu'à 13 %."
+                  important: true
           - conditions:
               - condition: or
                 conditions:
@@ -220,6 +236,10 @@ automation:
                         entity_id: sensor.batteries_etat_de_la_capacite
                         above: 12.5
             sequence:
+              - variables:
+                  etait_force: >-
+                    {{ is_state('input_boolean.statut_charge_forcee', 'on')
+                       or is_state('switch.batteries_charge_depuis_le_reseau', 'on') }}
               - action: huawei_solar.stop_forcible_charge
                 data: { device_id: VOTRE_DEVICE_ID_BATTERIE }
               - action: input_boolean.turn_off
@@ -230,6 +250,16 @@ automation:
               - action: select.select_option
                 target: { entity_id: select.batteries_mode_de_fonctionnement }
                 data: { option: maximise_self_consumption }
+              - if: "{{ etait_force }}"
+                then:
+                  - action: script.cerveau_notifier
+                    data:
+                      categorie: batterie
+                      titre: "Batterie : retour en autoconsommation"
+                      message: >-
+                        Charge forcée terminée ({{ '6 h, fin des heures creuses' if trigger.id == 'charge_nuit_stop'
+                        else 'batterie au-dessus de 12,5 %' }}). Batterie à
+                        {{ states('sensor.batteries_etat_de_la_capacite') | float(0) | round(0) }} %.
     mode: restart
 
   # Chauffe-eau electrique : decision a 22 h (chauffe de nuit ou pas) selon le stock d'eau
@@ -266,10 +296,11 @@ automation:
                 target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
               - action: switch.turn_on
                 target: { entity_id: switch.prise_chauffe_eau }
-              - action: persistent_notification.create
+              - action: script.cerveau_notifier
                 data:
-                  title: "Chauffe-eau : sécurité nuit"
-                  message: "Stock à {{ states('input_number.stock_energie_ballon') }} kWh : relance nocturne pour sécuriser le matin."
+                  categorie: chauffe_eau
+                  titre: "Chauffe-eau : relance de nuit"
+                  message: "Stock à {{ states('input_number.stock_energie_ballon') | float(0) | round(1) }} kWh après une utilisation tardive : chauffe relancée cette nuit pour avoir de l'eau chaude demain matin."
           # Decision du soir
           - conditions:
               - condition: trigger
@@ -310,6 +341,10 @@ automation:
                     Stock {{ stock_actuel }} kWh · Météo J+1 {{ meteo_demain }} · Tempo {{ couleur_demain }} ·
                     Solcast J+1 {{ solcast_demain }} · Stock matin estimé {{ stock_matin_estime }} kWh ·
                     Stock soir estimé {{ stock_final_estime }} kWh
+                  resume: >-
+                    Demain : {{ couleur_demain }}, {{ meteo_demain }}, solaire prévu {{ solaire_demain | round(1) }} kWh.
+                    Stock {{ stock_actuel | round(1) }} kWh, estimé {{ stock_matin_estime | round(1) }} kWh demain matin
+                    et {{ stock_final_estime | round(1) }} kWh demain soir.
               - if:
                   - condition: template
                     value_template: "{{ decision_finale }}"
@@ -318,13 +353,21 @@ automation:
                     target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
                   - action: switch.turn_on
                     target: { entity_id: switch.prise_chauffe_eau }
-                  - action: persistent_notification.create
-                    data: { notification_id: chauffe_eau_decision, title: "Chauffe-eau : nuit", message: "{{ message_debug }}" }
+                  - action: script.cerveau_notifier
+                    data:
+                      categorie: chauffe_eau
+                      titre: "Chauffe-eau : chauffe cette nuit"
+                      message: "Le ballon chauffe cette nuit en heures creuses. {{ resume }}"
+                      detail: "{{ message_debug }}"
                 else:
                   - action: input_boolean.turn_off
                     target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
-                  - action: persistent_notification.create
-                    data: { notification_id: chauffe_eau_decision, title: "Chauffe-eau : repos (solaire prévu)", message: "{{ message_debug }}" }
+                  - action: script.cerveau_notifier
+                    data:
+                      categorie: chauffe_eau
+                      titre: "Chauffe-eau : pas de chauffe cette nuit"
+                      message: "Le stock et le solaire de demain suffisent. {{ resume }}"
+                      detail: "{{ message_debug }}"
           # Surplus solaire en journee
           - conditions:
               - condition: trigger
@@ -347,8 +390,11 @@ automation:
             sequence:
               - action: switch.turn_on
                 target: { entity_id: switch.prise_chauffe_eau }
-              - action: logbook.log
-                data: { name: Chauffe-eau, message: "Démarrage sur surplus (> 1 kW, batterie > 50 %)" }
+              - action: script.cerveau_notifier
+                data:
+                  categorie: chauffe_eau
+                  titre: "Chauffe-eau : marche sur surplus solaire"
+                  message: "Surplus solaire de plus de 1 kW et batterie au-dessus de 50 % : le ballon chauffe gratuitement."
           # Arrets
           - conditions:
               - condition: state
@@ -377,10 +423,26 @@ automation:
                         after: "06:00:00"
                         before: "22:00:00"
             sequence:
+              - variables:
+                  etait_on: "{{ is_state('switch.prise_chauffe_eau', 'on') }}"
               - action: switch.turn_off
                 target: { entity_id: switch.prise_chauffe_eau }
               - action: input_boolean.turn_off
                 target: { entity_id: input_boolean.chauffe_eau_nuit_programme }
+              # notification seulement si le ballon chauffait vraiment
+              - if: "{{ etait_on }}"
+                then:
+                  - action: script.cerveau_notifier
+                    data:
+                      categorie: chauffe_eau
+                      titre: "Chauffe-eau : arrêt"
+                      message: >-
+                        {{ {'battery_protect_critical': 'Batterie sous 40 % : elle est gardée pour la maison.',
+                            'surplus_stop': 'Le surplus solaire est retombé.',
+                            'tank_full': 'Ballon chaud.',
+                            'max_runtime_reached': '4 h de chauffe atteintes aujourd\'hui.',
+                            'turn_off_morning': '6 h : fin des heures creuses.'}.get(trigger.id, 'Arrêt.') }}
+                        Stock {{ states('input_number.stock_energie_ballon') | float(0) | round(1) }} kWh.
     mode: parallel
     max: 10
 

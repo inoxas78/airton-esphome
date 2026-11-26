@@ -41,8 +41,11 @@ La consigne (`sensor.chauffage_consigne_cible`) suit ces règles :
 Ce qu'il respecte :
 
 - une clim réglée à la main dans Home Assistant passe en **dérogation pendant 3 h** et le superviseur ne la touche plus. Le bouton « Tout en auto » rend la main à toutes les pièces ;
+- il ne touche jamais une zone Tado en **boost** ou réglée depuis l'application Tado : Tado reprend son planning tout seul ;
 - il n'envoie un ordre **que si l'état diffère**, avec 2 s entre deux clims ;
 - un interrupteur général (`input_boolean.superviseur_chauffage`) le met en pause.
+
+Chaque décision peut être **notifiée avec sa raison**, sur le téléphone et dans Home Assistant : « Chauffage : Gaz (Tado). Jour rouge en heures pleines : la chaudière chauffe, les clims restent en veille à 16 °C ». Voir [`cerveau_notifications.yaml`](homeassistant/packages/cerveau_notifications.yaml).
 
 ### Ses dépendances
 
@@ -61,6 +64,7 @@ Ce qu'il respecte :
 | [`chauffage_superviseur.yaml`](homeassistant/packages/chauffage_superviseur.yaml) | le superviseur ; l'interrupteur général, la saison, les consignes et les horaires ; les 3 capteurs de décision (source active, consigne cible, consigne chambres) ; les minuteurs et l'automatisation de dérogation ; la détection du surplus solaire ; le script « Tout en auto » |
 | [`presence.yaml`](homeassistant/packages/presence.yaml) | `binary_sensor.presence_maison` : fusion Tado + téléphones (le dernier changement l'emporte) et forçage présents / absents |
 | [`clims_conso.yaml`](homeassistant/packages/clims_conso.yaml) | consommation du jour par clim (pour le tableau de bord) |
+| [`cerveau_notifications.yaml`](homeassistant/packages/cerveau_notifications.yaml) | facultatif : notification de chaque décision avec sa raison (téléphone, centre de notifications, journal) |
 
 **À adapter :** la **table des pièces**, en tête du superviseur. Une ligne par pièce : la clim, la vanne Tado de la même pièce, le minuteur de dérogation et le type `mono` ou `bi` :
 
@@ -85,6 +89,7 @@ homeassistant/
   packages/presence.yaml              présence (fusion Tado + téléphones, forçage)
   packages/clims_conso.yaml           consommation du jour par clim
   packages/energie_tempo.yaml         Tempo, batterie, chauffe-eau, EMHASS, alertes
+  packages/cerveau_notifications.yaml chaque décision notifiée avec sa raison
   dashboard/thermostats.yaml          vue "Thermostats" (Mushroom)
   recorder_exemple.yaml               enregistreur allégé
 docs/

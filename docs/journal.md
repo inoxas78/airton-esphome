@@ -99,3 +99,15 @@ Voir [protocole-tuya-monosplit.md](protocole-tuya-monosplit.md) et [protocole-7a
 ## 16. Température de la télécommande (I-Feel)
 
 Elle n'est transmise au module Wi-Fi sur aucun des deux modèles. Pour réguler sur la température réelle d'une pièce, utiliser un capteur Home Assistant (Tado, ESPHome…).
+
+## 17. Le boost Tado annulé, et les notifications du « cerveau »
+
+Un jour rouge, un boost lancé depuis l'application Tado s'arrête au bout de 12 min. Le journal montre la cause : une dérogation de clim arrive à son terme, le superviseur se relance et remet toutes les zones Tado en `auto`. Correction : une zone Tado en `heat` (boost ou réglage manuel) n'est plus jamais touchée.
+
+Pour ne plus avoir à fouiller le journal, chaque décision est maintenant notifiée avec sa raison, sur le téléphone et dans Home Assistant : voir [orchestrateur.md](orchestrateur.md#notifications-des-décisions).
+
+Au passage :
+
+- une clim qui redémarre peut revenir **éteinte**. Le superviseur repasse maintenant quand elle redevient disponible ;
+- la recharge de « sauvetage » de la batterie, réglée à 6,5 %, bouclait toute la journée, puisque l'onduleur arrête lui-même la décharge à 5 % : recharge à 13 %, décharge, recharge… Le seuil est passé à 3 %, jours rouges seulement.
+

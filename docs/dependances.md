@@ -34,6 +34,7 @@ Pour le tableau de bord seulement : Mushroom, mini-graph-card et card-mod (HACS)
 | `binary_sensor.presence_maison` | presence.yaml | présent ou absent (consignes jour / nuit / absence) |
 | `binary_sensor.presence_telephones`, `input_boolean.presence_calculee`, `input_select.mode_presence` | presence.yaml | fusion Tado + téléphones, forçage |
 | `sensor.clim_*_conso_jour` | clims_conso.yaml | consommation du jour (tableau de bord uniquement) |
+| `script.cerveau_notifier`, automatisation `cerveau_decisions_chauffage` | cerveau_notifications.yaml | facultatif : explique chaque décision (téléphone, centre de notifications, journal) |
 
 ## 3. La table des pièces
 

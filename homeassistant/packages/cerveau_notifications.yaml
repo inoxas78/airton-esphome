@@ -1,0 +1,247 @@
+# =============================================================================
+#  CERVEAU : NOTIFICATIONS DES DECISIONS
+#  Chaque decision des automatisations "cerveau" (superviseur de chauffage, batterie,
+#  chauffe-eau) part, avec sa raison :
+#    - dans le journal d'activite ;
+#    - sur l'iPhone (application compagnon) ;
+#    - dans le centre de notifications de Home Assistant (une notification par categorie,
+#      remplacee par la decision suivante ; l'historique complet est dans le journal).
+#  A adapter : le service notify.mobile_app_VOTRE_IPHONE et la table des pieces.
+# =============================================================================
+
+input_boolean:
+  cerveau_notifications:
+    name: Cerveau notifications
+    icon: mdi:brain
+
+input_text:
+  # dernier etat notifie : source|consigne|chambres|presence|zones Tado en manuel
+  cerveau_dernier_etat:
+    name: Cerveau dernier état
+    max: 255
+    icon: mdi:brain
+
+script:
+  cerveau_notifier:
+    alias: "Cerveau : notifier une décision"
+    icon: mdi:brain
+    mode: queued
+    max: 30
+    fields:
+      categorie:
+        description: chauffage, chauffe_eau, batterie
+        required: true
+        selector: { select: { options: [chauffage, chauffe_eau, batterie, clims, presence] } }
+      titre: { required: true, selector: { text: {} } }
+      message: { required: true, selector: { text: { multiline: true } } }
+      detail:
+        description: détail technique, centre de notifications HA seulement
+        selector: { text: { multiline: true } }
+      important:
+        description: notification « urgente » sur l'iPhone
+        default: false
+        selector: { boolean: {} }
+    sequence:
+      - variables:
+          icone: "{{ {'chauffage':'🔥','chauffe_eau':'🚿','batterie':'🔋','clims':'❄️','presence':'🏠'}.get(categorie, '🧠') }}"
+          imp: "{{ important | default(false) | bool }}"
+      - action: logbook.log
+        data:
+          name: "Cerveau · {{ titre }}"
+          message: "{{ message }}"
+          entity_id: input_boolean.cerveau_notifications
+      - condition: state
+        entity_id: input_boolean.cerveau_notifications
+        state: "on"
+      - action: notify.mobile_app_VOTRE_IPHONE
+        continue_on_error: true
+        data:
+          title: "{{ icone }} {{ titre }}"
+          message: "{{ message }}"
+          data:
+            group: "cerveau-{{ categorie }}"
+            push:
+              thread-id: "cerveau-{{ categorie }}"
+              interruption-level: "{{ 'time-sensitive' if imp else 'active' }}"
+      - action: persistent_notification.create
+        continue_on_error: true
+        data:
+          notification_id: "cerveau_{{ categorie }}"
+          title: "{{ icone }} {{ titre }} · {{ now().strftime('%H:%M') }}"
+          message: "{{ message }}{% if detail is defined and detail %}\n\n<sub>{{ detail }}</sub>{% endif %}"
+
+automation:
+  # Le superviseur agit piece par piece ; ici on explique POURQUOI, une seule fois par
+  # changement : source (Tempo), consigne (jour, nuit, absence, reveil, prechauffage veille
+  # rouge), chambres, presence, boost Tado, debut et fin des reglages manuels des clims.
+  # Les changements simultanes sont regroupes (15 s) et seuls les vrais changements
+  # sont notifies (comparaison avec input_text.cerveau_dernier_etat).
+  - id: cerveau_decisions_chauffage
+    alias: "Cerveau : notifier les décisions du chauffage"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.chauffage_source_active
+          - sensor.chauffage_consigne_cible
+          - sensor.chauffage_consigne_chambres
+          - binary_sensor.presence_maison
+          # zones Tado : "heat" = boost ou reglage depuis l'appli Tado
+          - climate.salon
+          - climate.bureau
+          - climate.chambre_1
+          - climate.chambre_2
+          - climate.chambre_3
+          - climate.chambre_parents
+        not_from: [unavailable, unknown]
+        not_to: [unavailable, unknown]
+        id: etat
+      - trigger: state
+        entity_id:
+          - timer.derogation_clim_salon
+          - timer.derogation_clim_bureau
+          - timer.derogation_clim_chambre_1
+          - timer.derogation_clim_chambre_2
+          - timer.derogation_clim_chambre_3
+          - timer.derogation_clim_chambre_parents
+        to: active
+        id: derog_debut
+      - trigger: event
+        event_type: timer.finished
+        id: derog_fin
+    actions:
+      - variables:
+          pieces:
+            - { nom: Salon, clim: climate.clim_salon, tado: climate.salon, timer: timer.derogation_clim_salon, type: mono }
+            - { nom: Bureau, clim: climate.clim_bureau, tado: climate.bureau, timer: timer.derogation_clim_bureau, type: mono }
+            - { nom: Chambre 1, clim: climate.clim_chambre_1, tado: climate.chambre_1, timer: timer.derogation_clim_chambre_1, type: bi }
+            - { nom: Chambre 2, clim: climate.clim_chambre_2, tado: climate.chambre_2, timer: timer.derogation_clim_chambre_2, type: bi }
+            - { nom: Chambre 3, clim: climate.clim_chambre_3, tado: climate.chambre_3, timer: timer.derogation_clim_chambre_3, type: bi }
+            - { nom: Parents, clim: climate.clim_chambre_parents, tado: climate.chambre_parents, timer: timer.derogation_clim_chambre_parents, type: bi }
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: derog_debut
+            sequence:
+              - variables:
+                  p: "{{ pieces | selectattr('timer', 'eq', trigger.entity_id) | list | first | default({}) }}"
+              - condition: template
+                value_template: "{{ p.nom is defined }}"
+              - action: script.cerveau_notifier
+                data:
+                  categorie: chauffage
+                  titre: "Chauffage : {{ p.nom }} en manuel"
+                  message: >-
+                    {{ p.nom }} réglée à la main : le superviseur ne touche plus à cette clim jusqu'à
+                    {{ (as_datetime(state_attr(p.timer, 'finishes_at')) | as_local).strftime('%H:%M')
+                       if state_attr(p.timer, 'finishes_at') else 'dans 3 h' }}.
+                    Bouton « Tout en auto » pour lui rendre la main.
+          - conditions:
+              - condition: trigger
+                id: derog_fin
+              - condition: template
+                value_template: "{{ trigger.event.data.entity_id is string and trigger.event.data.entity_id.startswith('timer.derogation_') }}"
+            sequence:
+              - variables:
+                  p: "{{ pieces | selectattr('timer', 'eq', trigger.event.data.entity_id) | list | first | default({}) }}"
+                  src: "{{ states('sensor.chauffage_source_active') }}"
+              - condition: template
+                value_template: "{{ p.nom is defined }}"
+              - action: script.cerveau_notifier
+                data:
+                  categorie: chauffage
+                  titre: "Chauffage : {{ p.nom }} repris en auto"
+                  message: >-
+                    Fin du réglage manuel, le superviseur reprend la main :
+                    {% if src == 'Gaz (Tado)' %}veille à 16 °C (jour rouge, la chaudière chauffe)
+                    {%- elif src == 'Clim chauffage' %}chauffage à
+                    {{ states('sensor.chauffage_consigne_chambres' if p.type == 'bi' else 'sensor.chauffage_consigne_cible') | float(0) | round(1) }} °C
+                    {%- else %}{{ src }}{% endif %}.
+        default:
+          - delay: { seconds: 15 }
+          - variables:
+              src: "{{ states('sensor.chauffage_source_active') }}"
+              cible: "{{ '%g' | format(states('sensor.chauffage_consigne_cible') | float(0)) }}"
+              ch: "{{ '%g' | format(states('sensor.chauffage_consigne_chambres') | float(0)) }}"
+              pres: "{{ states('binary_sensor.presence_maison') }}"
+              tado_man: >-
+                {% set ns = namespace(l=[]) %}{% for p in pieces %}{% if is_state(p.tado, 'heat') %}{% set ns.l = ns.l + [p.nom] %}{% endif %}{% endfor %}{{ ns.l | join(', ') }}
+          - variables:
+              etat: "{{ [src, cible, ch, pres, tado_man] | join('|') }}"
+              old: "{{ states('input_text.cerveau_dernier_etat').split('|') }}"
+          - variables:
+              o_src: "{{ old[0] if old | count == 5 else '' }}"
+              o_cible: "{{ old[1] if old | count == 5 else '' }}"
+              o_ch: "{{ old[2] if old | count == 5 else '' }}"
+              o_pres: "{{ old[3] if old | count == 5 else '' }}"
+              o_tado: "{{ old[4] if old | count == 5 else '' }}"
+          - if:
+              - condition: template
+                value_template: "{{ old | count == 5 and etat != states('input_text.cerveau_dernier_etat') }}"
+            then:
+              - action: script.cerveau_notifier
+                data:
+                  categorie: chauffage
+                  important: "{{ src != o_src or (tado_man != o_tado and tado_man != '') }}"
+                  titre: >-
+                    {%- if src != o_src -%}Chauffage : {{ src }}
+                    {%- elif tado_man != o_tado -%}{{ 'Chauffage : boost Tado détecté' if tado_man else 'Chauffage : fin du boost Tado' }}
+                    {%- elif pres != o_pres -%}Chauffage : maison {{ 'occupée' if pres == 'on' else 'vide' }}
+                    {%- elif cible != o_cible -%}Chauffage : consigne {{ o_cible }} → {{ cible }} °C
+                    {%- else -%}Chauffage : chambres {{ o_ch }} → {{ ch }} °C{%- endif -%}
+                  message: >-
+                    {%- set n = now() -%}
+                    {%- set ete = states('input_select.saison_clim').startswith('Été') -%}
+                    {%- set vac = is_state('binary_sensor.mode_vacances_actif', 'on') -%}
+                    {%- set present = pres == 'on' or vac -%}
+                    {%- set we = n.weekday() >= 5 -%}
+                    {%- set rev = states('input_datetime.chauffage_reveil_week_end') if we else states('input_datetime.chauffage_reveil_semaine') -%}
+                    {%- set ant = 0 if ete else states('input_number.chauffage_anticipation_reveil') | int(60) -%}
+                    {%- set debut_jour = today_at(rev) - timedelta(minutes=ant) -%}
+                    {%- set debut_nuit = today_at(states('input_datetime.chauffage_debut_nuit')) -%}
+                    {%- set jour = debut_jour <= n < debut_nuit -%}
+                    {%- set coul = states('sensor.rte_tempo_couleur_actuelle') -%}
+                    {%- set hc = is_state('binary_sensor.rte_tempo_heures_creuses', 'on') -%}
+                    {%- set l = namespace(x=[]) -%}
+                    {%- if src != o_src -%}
+                      {%- set r = {'Gaz (Tado)': 'Jour rouge en heures pleines (6 h – 22 h) : la chaudière gaz chauffe, Tado suit son planning. Les clims restent en veille à 16 °C.',
+                                   'Clim chauffage': 'Tempo ' ~ coul | lower ~ (' en heures creuses' if hc else ' en heures pleines') ~ ' : les clims (pompes à chaleur) chauffent à la consigne, Tado est coupé.',
+                                   'Clim été': 'Saison été : clims en climatisation, Tado coupé.',
+                                   'Arrêt': 'Mi-saison : clims éteintes, Tado en auto.'}.get(src, '') -%}
+                      {%- set l.x = l.x + ['Source : ' ~ o_src ~ ' → ' ~ src ~ '. ' ~ r] -%}
+                    {%- endif -%}
+                    {%- if pres != o_pres -%}
+                      {%- set mode = states('input_select.mode_presence') -%}
+                      {%- set l.x = l.x + ['Maison ' ~ ('occupée' if pres == 'on' else 'vide') ~ ' (' ~ (mode if mode.startswith('Forc') else 'téléphones : ' ~ ('là' if is_state('binary_sensor.presence_telephones', 'on') else 'partis') ~ ', Tado : ' ~ states('sensor.maison_mode_tado')) ~ ').'] -%}
+                    {%- endif -%}
+                    {%- if cible != o_cible -%}
+                      {%- set pre = not ete and present and hc and states('sensor.rte_tempo_prochaine_couleur') == 'Rouge' and 4 <= n.hour < 6 -%}
+                      {%- if not present -%}{%- set rc = 'personne à la maison' -%}
+                      {%- elif jour -%}{%- set rc = 'journée, depuis ' ~ debut_jour.strftime('%H:%M') ~ ' (réveil ' ~ rev[:5] ~ (' − ' ~ ant ~ ' min d’anticipation' if ant else '') ~ ')' ~ (' ; vacances : consigne maintenue même sans personne' if pres != 'on' else '') -%}
+                      {%- else -%}{%- set rc = 'nuit (à partir de ' ~ debut_nuit.strftime('%H:%M') ~ ')' -%}{%- endif -%}
+                      {%- if pre -%}{%- set rc = rc ~ ', + ' ~ states('input_number.chauffage_prechauffage_veille_rouge') ~ ' °C de préchauffage avant le jour rouge' -%}{%- endif -%}
+                      {%- set l.x = l.x + ['Consigne maison : ' ~ o_cible ~ ' → ' ~ cible ~ ' °C (' ~ rc ~ ').'] -%}
+                    {%- endif -%}
+                    {%- if ch != o_ch -%}
+                      {%- set journee = today_at(states('input_datetime.chauffage_chambres_debut_journee')) <= n < today_at(states('input_datetime.chauffage_chambres_fin_journee')) -%}
+                      {%- if not ete and present and journee -%}{%- set rch = 'journée en semaine, enfants à l’école' if (n.weekday() < 5 and not vac) else 'journée de week-end ou de vacances' -%}
+                      {%- else -%}{%- set rch = 'même consigne que la maison' -%}{%- endif -%}
+                      {%- set l.x = l.x + ['Chambres : ' ~ o_ch ~ ' → ' ~ ch ~ ' °C (' ~ rch ~ ').'] -%}
+                    {%- endif -%}
+                    {%- if tado_man != o_tado -%}
+                      {%- if tado_man -%}{%- set l.x = l.x + ['Réglage manuel Tado (boost ou appli) : ' ~ tado_man ~ '. Le superviseur n’y touche pas ; Tado reprendra son planning tout seul.'] -%}
+                      {%- else -%}{%- set l.x = l.x + ['Tado a repris son planning (' ~ o_tado ~ ').'] -%}{%- endif -%}
+                    {%- endif -%}
+                    {%- if src == 'Gaz (Tado)' and src == o_src and (cible != o_cible or ch != o_ch) -%}
+                      {%- set l.x = l.x + ['Jour rouge : les clims restent à 16 °C, cette consigne leur sera appliquée à 22 h.'] -%}
+                    {%- endif -%}
+                    {%- set d = namespace(x=[]) -%}
+                    {%- for p in pieces if is_state(p.timer, 'active') -%}
+                      {%- set d.x = d.x + [p.nom ~ ' (jusqu’à ' ~ (as_datetime(state_attr(p.timer, 'finishes_at')) | as_local).strftime('%H:%M') ~ ')'] -%}
+                    {%- endfor -%}
+                    {%- if d.x -%}{%- set l.x = l.x + ['Clims en réglage manuel, non touchées : ' ~ d.x | join(', ') ~ '.'] -%}{%- endif -%}
+                    {{ l.x | join('\n') }}
+          - action: input_text.set_value
+            target: { entity_id: input_text.cerveau_dernier_etat }
+            data: { value: "{{ etat[:255] }}" }
