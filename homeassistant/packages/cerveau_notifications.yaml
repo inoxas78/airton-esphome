@@ -60,6 +60,9 @@ script:
           message: "{{ message }}"
           data:
             group: "cerveau-{{ categorie }}"
+            # un appui ouvre le journal des decisions (texte complet, historique)
+            url: /logbook?entity_id=input_boolean.cerveau_notifications
+            clickAction: /logbook?entity_id=input_boolean.cerveau_notifications
             push:
               thread-id: "cerveau-{{ categorie }}"
               interruption-level: "{{ 'time-sensitive' if imp else 'active' }}"
