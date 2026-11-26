@@ -235,13 +235,15 @@ sensor:
       int m = id(g_mode);
       if (m == 4) return id(p_ventil).state;
       float amb = id(temp_ambiante).state;
+      if (isnan(amb)) amb = id(airton_ac).current_temperature;
       float cons = (float) id(g_consigne);
-      float ecart = 1.0f;
-      if (!isnan(amb) && cons >= 16) {
-        if (m == 3) ecart = cons - amb;
-        else if (m == 1 || m == 2) ecart = amb - cons;
-        else ecart = fabsf(cons - amb);
-      }
+      // DP2 parfois perdu ou hors plage apres une reconnexion : consigne affichee
+      if (cons < 16 || cons > 31) cons = id(airton_ac).target_temperature;
+      if (isnan(amb) || isnan(cons) || cons < 16) return id(p_mini).state;
+      float ecart;
+      if (m == 3) ecart = cons - amb;
+      else if (m == 1 || m == 2) ecart = amb - cons;
+      else ecart = fabsf(cons - amb);
       if (ecart < -1.0f) return id(p_ventil).state;
       float k = (ecart + 1.0f) / 4.0f;
       if (k > 1.0f) k = 1.0f;
@@ -260,6 +262,23 @@ sensor:
     icon: mdi:lightning-bolt
     filters:
       - multiply: 0.001
+
+  # Diagnostic des deconnexions
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+  - platform: wifi_signal
+    name: "Signal Wi-Fi"
+    update_interval: 60s
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: "Raison du redémarrage"
+
+debug:
+  update_interval: 3600s
 
 # Parametres de l'estimation, reglables depuis Home Assistant
 number:
