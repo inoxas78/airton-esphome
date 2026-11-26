@@ -30,7 +30,10 @@ Rien à faire par le Wi-Fi : aucun DP ne le coupe. Sur les bi-splits, activez la
 Les unités d'un même groupe extérieur ne peuvent pas être l'une en chaud, l'autre en froid.
 
 **Monosplit : la puissance estimée reste bloquée vers 725 W alors que la clim ne chauffe pas.**
-Après une reconnexion du module, la consigne (DP2) peut manquer ou arriver hors plage. L'ancienne formule supposait alors une « charge moyenne ». Elle reprend maintenant la consigne affichée par l'entité climate. Les capteurs « Uptime », « Signal Wi-Fi » et « Raison du redémarrage » aident à comprendre les décrochages.
+Après une reconnexion du module, la consigne (DP2) peut manquer ou arriver hors plage. L'ancienne formule supposait alors une « charge moyenne ». Elle reprend maintenant la consigne affichée par l'entité climate. Le capteur « Uptime » montre les redémarrages.
+
+**Monosplit : le module redémarre en boucle, et la clim s'éteint ou se rallume toute seule.**
+La carte envoie par moments des rafales de trames : une dizaine de DP3 en 2 s, avec des erreurs de checksum. Sur un ESP8266, ajouter les composants `debug` et `wifi_signal` a coïncidé avec une vingtaine de redémarrages en une soirée (« Software/System restart »). Garder le journal en `INFO` et un minimum de composants.
 
 **La puissance moyenne d'une bi-split reste vide.**
 Elle apparaît au **deuxième** pas du compteur d'énergie, c'est-à-dire après 0,2 kWh consommés depuis le démarrage de l'ESP.

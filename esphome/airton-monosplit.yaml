@@ -20,6 +20,7 @@ web_server:
 
 logger:
   baud_rate: 0          # l'UART materiel est utilise par la clim
+  level: INFO           # la carte envoie des rafales de DP3 : DEBUG surcharge l'ESP8266
 
 api:
 
@@ -263,22 +264,12 @@ sensor:
     filters:
       - multiply: 0.001
 
-  # Diagnostic des deconnexions
+  # Diagnostic des redemarrages (leger ; debug et wifi_signal retires : trop lourds
+  # pour l'ESP8266 avec le flot de trames de la carte)
   - platform: uptime
     name: "Uptime"
-    entity_category: diagnostic
-  - platform: wifi_signal
-    name: "Signal Wi-Fi"
     update_interval: 60s
     entity_category: diagnostic
-
-text_sensor:
-  - platform: debug
-    reset_reason:
-      name: "Raison du redémarrage"
-
-debug:
-  update_interval: 3600s
 
 # Parametres de l'estimation, reglables depuis Home Assistant
 number:
